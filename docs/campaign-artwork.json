@@ -1,0 +1,20 @@
+{
+  "generator": "Built-in image_gen",
+  "purpose": "Illustrative campaign satellite views with synthesized fire and smoke; not current or historical fire observations.",
+  "source": "NASA GIBS Landsat WELD corrected reflectance, true color global annual composite, 2000-12-01",
+  "documentation": "https://nasa-gibs.github.io/gibs-api-docs/python-usage/",
+  "assets": [
+    {
+      "path": "public/assets/seruyan-satellite-fire.webp",
+      "reference": "seruyan-landsat.png",
+      "prompt": "Edit this actual NASA Landsat geographic reference into a polished satellite image illustration for the Seruyan, Central Kalimantan firefighting campaign in a game. Preserve the exact north-up overhead view, coastline and broad land/water geometry of the reference: the coast and dark sea at lower left, broad winding Seruyan lowland rivers, inland dark irregular lake near upper middle, dense flat green forest and plantations. Reconstruct and remove the diagonal black/cyan scan-line artifacts cleanly. Add visible but realistically small orange active fire fronts at 3-4 forest/clearing edges in the right-middle and lower-middle, dark brown charcoal burn scars and convincingly wind-blown pale gray smoke plumes streaming northwest with wispy translucent edges, with some forest visible through smoke. This is an editorial game satellite illustration, not a claim about current fire data. High quality natural color Landsat/Sentinel appearance; detailed green canopy, brown lowland patches, dark water, muted haze; all flat orthographic top-down, no horizon or oblique perspective. Daylight. Fires should be legible at thumbnail size but not huge fantasy lava. No labels, legends, city text, map pins, borders, logos, watermarks, annotations, or UI. Landscape 2:1 composition suitable for a campaign card.",
+      "source_url": "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Landsat_WELD_CorrectedReflectance_TrueColor_Global_Annual&STYLES=&FORMAT=image%2Fpng&SRS=EPSG%3A4326&WIDTH=1200&HEIGHT=600&BBOX=111.7%2C-3.2%2C112.9%2C-2.6&TIME=2000-12-01"
+    },
+    {
+      "path": "public/assets/ketapang-satellite-fire.webp",
+      "reference": "ketapang-landsat.png",
+      "prompt": "Edit this actual NASA Landsat geographic reference into a polished satellite image illustration for the Ketapang, West Kalimantan firefighting campaign in a game. Preserve the exact north-up overhead view and broad geography: blue-green Karimata Strait sea on left third, Ketapang coastline sweeping from upper left toward lower middle, the sinuous Pawan river estuary and pale settlement patch near left-middle, flat dark green peat swamp forest, patchwork clearings and inland forest on the right. Cleanly reconstruct and remove the diagonal black satellite scan-line artifacts and defective specks, keeping coastline and river geometry faithful. Add visible small orange fire fronts at several forest/plantation edges inland in the right half, associated irregular charcoal burn scars and realistic pale gray dense peat smoke plumes drifting west-northwest toward the coast; layered fine wisps and translucent smoke partially obscure only some areas. Editorial game satellite illustration, not a claim about current or September 2026 fire data. High quality natural color Landsat/Sentinel look, flat true top-down orthographic view, no horizon; detailed green vegetation, smoky blue-gray air and warm sparse fire glow with natural daylight. Legible at thumbnail size but no giant flames or volcanic lava. No labels, legends, dates, city names, map pins, borders, logos, watermarks, annotations or UI. Landscape 2:1 composition.",
+      "source_url": "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=Landsat_WELD_CorrectedReflectance_TrueColor_Global_Annual&STYLES=&FORMAT=image%2Fpng&SRS=EPSG%3A4326&WIDTH=1200&HEIGHT=600&BBOX=109.7%2C-2.15%2C110.9%2C-1.55&TIME=2000-12-01"
+    }
+  ]
+}

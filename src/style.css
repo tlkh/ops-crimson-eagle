@@ -45,56 +45,68 @@
 .sf-menu { position: absolute; inset: 0; z-index: 3; overflow: auto; overscroll-behavior: contain; background: #10201d; color: var(--sf-paper); padding: calc(23px + env(safe-area-inset-top, 0px)) calc(20px + env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) calc(20px + env(safe-area-inset-left, 0px)); }
 .sf-menu[hidden], .sf-game[hidden], .sf-root [hidden] { display: none !important; }
 .sf-menu-inner { width: min(1120px, 100%); min-height: 100%; margin-inline: auto; display: flex; flex-direction: column; }
-.sf-brand-block { display: flex; align-items: center; gap: 22px; padding: clamp(16px, 4.5vh, 46px) 0 clamp(20px, 5vh, 42px); }
-.sf-brand-block h1 { margin: 0; color: #f0ecdf; font: 500 clamp(50px, 8.7vw, 104px)/.8 Georgia, "Times New Roman", serif; letter-spacing: -.052em; }
-.sf-brand-block p { margin: 17px 0 0; color: #bec9bd; font-size: clamp(13px, 2vw, 17px); letter-spacing: .015em; }
-.sf-brand-mark { width: clamp(72px, 8.7vw, 112px); height: clamp(72px, 8.7vw, 112px); flex: 0 0 auto; object-fit: contain; }
-.sf-intro-row { display: flex; align-items: end; justify-content: space-between; gap: 16px; padding: 15px 0 17px; border-top: 1px solid #4c5c52; }
-.sf-intro-copy { max-width: 34rem; margin: 0; color: #e7e4d9; font: 400 clamp(18px, 2.8vw, 27px)/1.2 Georgia, "Times New Roman", serif; letter-spacing: -.018em; }
-.sf-live-stamp { flex: 0 0 auto; color: #b9c6b8; font-size: 10px; font-weight: 700; letter-spacing: .13em; text-align: right; }
-.sf-campaign-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding-top: 16px; }
-.sf-campaign-card { min-width: 0; min-height: 420px; display: flex; flex-direction: column; align-items: stretch; border: 1px solid #607064; padding: clamp(18px, 3vw, 29px); color: #f0edde; text-align: left; cursor: pointer; transition: border-color .22s ease, transform .22s ease, background-color .22s ease; }
-.sf-campaign-card:hover { transform: translateY(-3px); border-color: #c1af79; }
-.sf-campaign-card:active { transform: scale(.992); border-color: #ead497; }
+.sf-brand-block { display: flex; align-items: center; gap: 18px; padding: 13px 0 20px; }
+.sf-brand-block > div { min-width: 0; }
+.sf-brand-block h1 { margin: 0; color: #f0ecdf; font: 500 clamp(28px, 5.8vw, 64px)/1.03 Georgia, "Times New Roman", serif; letter-spacing: -.045em; white-space: nowrap; }
+.sf-brand-block p { margin: 9px 0 0; color: #bec9bd; font-size: 13px; letter-spacing: .015em; }
+.sf-brand-mark { width: 72px; height: 72px; flex: 0 0 auto; object-fit: contain; }
+.sf-campaign-section-head { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; padding: 15px 0 13px; border-top: 1px solid #4c5c52; }
+.sf-campaign-section-head h2 { margin: 0; color: #e7e4d9; font: 400 23px/1.2 Georgia, "Times New Roman", serif; }
+.sf-campaign-section-head > span { color: #b9c6b8; font-size: 10px; letter-spacing: .06em; }
+.sf-campaign-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding: 0 0 24px; }
+.sf-campaign-card { min-width: 0; display: flex; flex-direction: column; align-items: stretch; border: 1px solid #607064; padding: 20px; color: #f0edde; text-align: left; cursor: pointer; transition: transform 140ms cubic-bezier(.23,1,.32,1); }
 .sf-campaign-card--sg { background: #233c31; }
-.sf-campaign-card--sg:hover { background: #294537; }
 .sf-campaign-card--jp { background: #23333a; }
-.sf-campaign-card--jp:hover { background: #2b4147; }
+@media (hover: hover) and (pointer: fine) {
+  .sf-campaign-card:hover { transform: translateY(-2px); border-color: #c1af79; }
+  .sf-campaign-card--sg:hover { background: #294537; }
+  .sf-campaign-card--jp:hover { background: #2b4147; }
+  .sf-mission-row:not(:disabled):hover { background: #2b4437; }
+}
+.sf-campaign-card:active { transform: scale(.995); border-color: #ead497; }
+.sf-campaign-card:focus-visible { transform: none; }
 .sf-campaign-top { display: flex; justify-content: space-between; gap: 12px; align-items: center; color: #d1d4c4; }
-.sf-index { font: 500 22px/1 Georgia, "Times New Roman", serif; color: #e4bd69; }
-.sf-campaign-date { max-width: 78%; font-size: 11px; font-weight: 700; letter-spacing: .055em; text-align: right; text-transform: uppercase; }
-.sf-campaign-art { display: block; width: 100%; height: clamp(92px, 11vw, 136px); overflow: hidden; margin-top: 18px; border: 1px solid #c9d0ba55; background: #33443a; }
-.sf-campaign-art img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .5s ease; }
-.sf-campaign-card:hover .sf-campaign-art img { transform: scale(1.035); }
-.sf-campaign-title { display: block; margin-top: 20px; font: 500 clamp(27px, 4vw, 43px)/.98 Georgia, "Times New Roman", serif; letter-spacing: -.025em; }
-.sf-campaign-subtitle { display: block; margin-top: 10px; color: #d2dccf; font-size: 14px; }
-.sf-campaign-copy { display: block; max-width: 50ch; min-height: 59px; margin-top: 15px; color: #d2dbcf; font-size: 13px; line-height: 1.48; }
-.sf-kit-line { display: flex; align-items: center; gap: 12px; margin-top: 17px; padding: 12px 0; border-top: 1px solid #87958a55; }
-.sf-kit-line > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.sf-kit-line small, .sf-operation-facts small { color: #c1cbbc; font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
-.sf-kit-line b, .sf-operation-facts b { overflow: hidden; color: #f1eee1; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.sf-kit-line i { width: 1px; height: 27px; background: #aeb8a599; }
-.sf-select-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 15px; color: #f1e8cb; font-size: 12px; font-weight: 700; }
-.sf-select-arrow { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #a9b39f; border-radius: 50%; }
+.sf-index { font: 500 21px/1 Georgia, "Times New Roman", serif; color: #e4bd69; }
+.sf-campaign-date { font-size: 10px; font-weight: 650; letter-spacing: .025em; text-align: right; }
+.sf-campaign-title { display: block; margin-top: 14px; font: 500 clamp(27px, 3.8vw, 43px)/1.03 Georgia, "Times New Roman", serif; letter-spacing: -.025em; }
+.sf-campaign-subtitle { display: block; margin-top: 7px; color: #cad5ca; font-size: 11px; }
+.sf-campaign-art { position: relative; display: block; width: 100%; height: 142px; overflow: hidden; margin-top: 18px; background: #33443a; }
+.sf-campaign-art > img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.sf-region-caption { position: absolute; inset: auto 0 0; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 18px 10px 8px; color: #fff8e8; background: linear-gradient(transparent, #06130bea); }
+.sf-region-caption b { font-size: 10px; font-weight: 650; }
+.sf-region-caption small { flex-shrink: 0; font-size: 8px; color: #d7ded3; }
+.sf-campaign-copy { display: block; min-height: 54px; margin-top: 16px; color: #d2dbcf; font-size: 12px; line-height: 1.5; }
+.sf-fleet-portrait { position: relative; display: grid; place-items: center; width: 100%; aspect-ratio: 20 / 7; overflow: hidden; margin-top: 14px; background: #90adae; color: #1a3438; }
+.sf-fleet-portrait img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.sf-fleet-loading { padding: 20px; font-size: 11px; text-align: center; }
+.sf-kit-line { display: grid; grid-template-columns: 1fr 1.2fr; align-items: start; gap: 18px; padding: 13px 0; }
+.sf-kit-line > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.sf-kit-line small, .sf-operation-facts small { color: #c1cbbc; font-size: 9px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.sf-kit-line b, .sf-operation-facts b { color: #f1eee1; font-size: 12px; font-weight: 650; line-height: 1.35; white-space: normal; overflow-wrap: anywhere; }
+.sf-kit-detail { color: #becbc1; font-size: 10px; line-height: 1.35; }
+.sf-select-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 12px; border-top: 1px solid #87958a55; color: #f1e8cb; font-size: 12px; font-weight: 700; }
+.sf-select-arrow { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid #a9b39f; border-radius: 50%; }
 .sf-select-arrow svg, .sf-back-button svg, .sf-mission-go svg, .sf-modal-actions svg, .sf-flight-action svg, .sf-icon-button svg, .sf-modal-close svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .sf-menu-footer { display: flex; justify-content: space-between; gap: 16px; margin-top: auto; padding: 20px 0 1px; color: #aab8aa; font-size: 11px; letter-spacing: .025em; }
-
 .sf-mission-screen { padding-top: 5px; }
-.sf-back-button { width: fit-content; display: inline-flex; align-items: center; gap: 9px; border: 0; padding: 13px 0; color: #d5dbc9; background: transparent; font-size: 12px; font-weight: 700; cursor: pointer; }
+.sf-back-button { width: fit-content; min-height: 44px; display: inline-flex; align-items: center; gap: 9px; border: 0; padding: 13px 0; color: #d5dbc9; background: transparent; font-size: 12px; font-weight: 700; cursor: pointer; }
 .sf-back-button svg { transform: rotate(180deg); }
-.sf-mission-heading { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(190px, .65fr); align-items: end; gap: 24px; padding: clamp(19px, 4vh, 40px) 0 27px; border-bottom: 1px solid #526354; }
-.sf-mission-heading h1 { margin: 0; color: #f1eddf; font: 500 clamp(35px, 6vw, 68px)/.98 Georgia, "Times New Roman", serif; letter-spacing: -.035em; }
-.sf-mission-heading p { max-width: 70ch; margin: 15px 0 0; color: #c4d0c2; font-size: 12px; line-height: 1.55; }
-.sf-operation-facts { display: grid; gap: 12px; padding: 13px 15px; background: #1b3028; }
-.sf-operation-facts span { display: flex; flex-direction: column; gap: 3px; }
+.sf-mission-heading { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, 1fr); align-items: center; gap: 40px; padding: 22px 0 28px; border-bottom: 1px solid #526354; }
+.sf-mission-region { display: block; margin-bottom: 14px; color: #dac591; font-size: 11px; }
+.sf-mission-heading h1 { margin: 0; color: #f1eddf; font: 500 clamp(35px, 5.8vw, 62px)/1.02 Georgia, "Times New Roman", serif; letter-spacing: -.035em; }
+.sf-mission-heading h1:focus { outline: none; }
+.sf-mission-evidence { display: block; margin-top: 12px; color: #c4d0c2; font-size: 11px; }
+.sf-mission-heading p { max-width: 60ch; margin: 17px 0 0; color: #c4d0c2; font-size: 13px; line-height: 1.6; }
+.sf-mission-fleet { min-width: 0; }
+.sf-mission-fleet .sf-fleet-portrait { margin-top: 0; }
+.sf-operation-facts { display: grid; grid-template-columns: 1fr 1.15fr; gap: 16px; padding: 13px 0 0; }
+.sf-operation-facts > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .sf-mission-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; padding: 26px 0 13px; }
 .sf-mission-section-head h2 { margin: 0; color: #ede8d9; font: 500 clamp(22px, 3vw, 31px)/1 Georgia, "Times New Roman", serif; }
 .sf-mission-section-head > span { color: #bcc9b8; font-size: 10px; text-align: right; }
 .sf-mission-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: #62715e; border: 1px solid #62715e; }
-.sf-mission-row { min-height: 110px; display: grid; grid-template-columns: 42px minmax(0, 1fr) 34px; gap: 13px; align-items: center; border: 0; padding: 15px 17px; color: #e9e7d9; background: #1b3029; text-align: left; cursor: pointer; transition: background-color .18s ease; }
-.sf-mission-row:hover { background: #2b4437; }
+.sf-mission-row { min-height: 110px; display: grid; grid-template-columns: 34px minmax(0, 1fr) 31px; gap: 13px; align-items: center; border: 0; padding: 15px 17px; color: #e9e7d9; background: #1b3029; text-align: left; cursor: pointer; }
 .sf-mission-row:disabled { color: #c8cabc; background: #192822; cursor: not-allowed; }
-.sf-mission-row:disabled:hover { background: #192822; }
 .sf-mission-row.is-locked .sf-mission-index, .sf-mission-row.is-locked .sf-mission-meta { color: #b2bbaa; }
 .sf-mission-row.is-locked .sf-mission-main strong { color: #d0d2c5; }
 .sf-mission-index { align-self: start; color: #dfb862; font: 500 19px/1.2 Georgia, "Times New Roman", serif; }
@@ -198,23 +210,23 @@
 
 @media (max-width: 720px) {
   .sf-menu { padding-top: calc(17px + env(safe-area-inset-top, 0px)); }
-  .sf-brand-block { gap: 15px; padding-top: 23px; padding-bottom: 25px; }
-  .sf-brand-block h1 { font-size: clamp(48px, 14.5vw, 68px); }
-  .sf-brand-mark { width: 72px; height: 72px; }
-  .sf-intro-row { align-items: start; flex-direction: column; padding-top: 14px; }
-  .sf-live-stamp { text-align: left; }
-  .sf-campaign-grid { grid-template-columns: 1fr; gap: 9px; padding-top: 10px; }
-  .sf-campaign-card { min-height: 0; padding: 17px; }
-  .sf-campaign-art { height: 100px; margin-top: 14px; }
-  .sf-campaign-title { margin-top: 16px; font-size: 31px; }
-  .sf-campaign-copy { min-height: 0; margin-top: 13px; }
-  .sf-kit-line { margin-top: 11px; padding: 9px 0; }
+  .sf-brand-block { gap: 10px; padding: 13px 0 21px; }
+  .sf-brand-block h1 { font-size: clamp(25px, 7.5vw, 48px); }
+  .sf-brand-block p { margin-top: 7px; font-size: 10px; }
+  .sf-brand-mark { width: clamp(34px, 9vw, 55px); height: clamp(34px, 9vw, 55px); }
+  .sf-campaign-section-head h2 { font-size: 21px; }
+  .sf-campaign-grid { grid-template-columns: 1fr; gap: 16px; }
+  .sf-campaign-card { padding: 16px; }
+  .sf-campaign-title { font-size: 33px; }
+  .sf-campaign-subtitle { font-size: 11px; }
+  .sf-campaign-art { height: 138px; margin-top: 16px; }
+  .sf-campaign-copy { min-height: 0; margin-top: 14px; }
+  .sf-kit-line { gap: 12px; padding: 12px 0; }
   .sf-select-line { padding-top: 10px; }
-  .sf-select-arrow { width: 31px; height: 31px; }
   .sf-menu-footer { margin-top: 14px; padding-top: 13px; font-size: 9px; }
-  .sf-mission-heading { grid-template-columns: 1fr; gap: 16px; padding: 19px 0 19px; }
-  .sf-mission-heading h1 { font-size: 42px; }
-  .sf-operation-facts { grid-template-columns: 1fr 1fr; }
+  .sf-mission-heading { grid-template-columns: 1fr; gap: 24px; padding: 19px 0; }
+  .sf-mission-heading h1 { font-size: 40px; }
+  .sf-operation-facts { grid-template-columns: 1fr 1.2fr; }
   .sf-mission-section-head { align-items: start; flex-direction: column; gap: 4px; padding-top: 20px; }
   .sf-mission-section-head > span { text-align: left; }
   .sf-mission-list { grid-template-columns: 1fr; }

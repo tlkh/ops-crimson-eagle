@@ -33,17 +33,21 @@ function icon(name: 'map' | 'pause' | 'play' | 'home' | 'target' | 'water' | 'cl
 
 function campaignCopy(campaign: Campaign) {
   if (campaign.id === 'sg_fictional_2026_10') return {
-    eyebrow: 'Singapore · fictional campaign',
-    title: 'Seruyan relief flight',
-    copy: 'A fictional humanitarian mission inspired by Indonesia’s October 2026 wildfire and haze conditions.',
-    evidence: 'Fictional relief mission · 9 October 2026',
+    location: 'Seruyan · Central Kalimantan',
+    copy: 'Due to hazardous levels of haze affecting Singapore, the SAF forward deploys RSS Persistence, an LST, and an RSAF Chinook crew to aid firefighting efforts in the Seruyan area.',
+    date: 'October 2026',
+    aircraft: 'RSAF CH-47F Chinook',
+    ship: 'RSS Persistence',
+    shipClass: 'Endurance-class LST · 209',
     paint: 'sg',
   };
   return {
-    eyebrow: 'Japan · reconstructed operation',
-    title: 'Ketapang fire response',
-    copy: 'Based on Japan’s real September 2026 firefighting deployment to Indonesia. Playable missions, exact routes, ship positions, weather and freshwater refill lakes are reconstructed for the game.',
-    evidence: 'Real operation · reconstructed missions · 23–29 September 2026',
+    location: 'Ketapang · West Kalimantan',
+    copy: 'Deploy with JS Kunisaki and a JGSDF Chinook crew to support firefighting around Ketapang. Fly reconstructed sorties inspired by Japan’s September 2026 deployment to Indonesia.',
+    date: '23–29 September 2026',
+    aircraft: 'JGSDF CH-47JA Chinook',
+    ship: 'JS Kunisaki',
+    shipClass: 'Ōsumi-class LST · LST-4003',
     paint: 'jp',
   };
 }
@@ -91,7 +95,7 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
 } {
   root.classList.add('sf-root');
   root.innerHTML = `
-    <main class="sf-app" aria-label="Operation Crimson Eagle">
+    <main class="sf-app" aria-label="Ops Crimson Eagle">
       <div class="sf-scene-host" data-scene-host aria-label="3D firefighting flight scene"></div>
       <div class="sf-bucket-hud" data-bucket-hud hidden aria-label="Bucket water capacity">
         <span class="sf-bucket-hud-label" data-bucket-label>EMPTY</span>
@@ -240,17 +244,61 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     releaseSticks();
   };
 
-  const renderCampaigns = () => {
+  let menuHasOpened = false;
+  let selectedCampaignId: CampaignId | undefined;
+  const menuAnimations = new Set<Animation>();
+  const enterMenu = (direction: 'initial' | 'forward' | 'back', event?: Event) => {
+    menu.scrollTop = 0;
+    for (const animation of menuAnimations) animation.cancel();
+    menuAnimations.clear();
+    const keyboard = event instanceof MouseEvent && event.detail === 0;
+    if (keyboard) return;
+    const target = menu.querySelector<HTMLElement>(direction === 'initial' ? '.sf-campaign-grid' : '.sf-menu-inner');
+    if (!target) return;
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const from = reduced ? 'none' : direction === 'initial' ? 'translateY(6px)' : `translateX(${direction === 'forward' ? 10 : -10}px)`;
+    const animation = target.animate([{ opacity: 0, transform: from }, { opacity: 1, transform: 'none' }], {
+      duration: reduced ? 80 : direction === 'initial' ? 220 : 180,
+      easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
+    });
+    menuAnimations.add(animation);
+    animation.onfinish = () => menuAnimations.delete(animation);
+  };
+  const fleetMarkup = (campaign: Campaign) => `<span class="sf-fleet-portrait" data-fleet="${campaign.id}">
+    <img data-fleet-image alt="Side view of ${escapeText(campaignCopy(campaign).aircraft)} flying alongside ${escapeText(campaignCopy(campaign).ship)}" width="1200" height="420" hidden />
+    <span class="sf-fleet-loading">Preparing aircraft and ship view…</span>
+  </span>`;
+  const loadFleet = (campaign: Campaign) => {
+    const target = menu.querySelector<HTMLElement>(`[data-fleet="${campaign.id}"]`);
+    if (!target) return;
+    requestAnimationFrame(() => {
+      if (disposed || !target.isConnected) return;
+      void import('../render/campaignFleet').then(({ renderCampaignFleet }) => renderCampaignFleet(campaign)).then(url => {
+        if (disposed || !target.isConnected) return;
+        const image = target.querySelector<HTMLImageElement>('[data-fleet-image]')!;
+        image.src = url; image.hidden = false;
+        target.querySelector('.sf-fleet-loading')?.remove();
+      }).catch(() => {
+        if (target.isConnected) target.querySelector('.sf-fleet-loading')!.textContent = 'Aircraft and ship ready for deployment';
+      });
+    });
+  };
+  const kitMarkup = (campaign: Campaign) => {
+    const c = campaignCopy(campaign);
+    return `<span><small>Aircraft</small><b>${escapeText(c.aircraft)}</b></span><span><small>Home ship</small><b>${escapeText(c.ship)}</b><span class="sf-kit-detail">${escapeText(c.shipClass)}</span></span>`;
+  };
+
+  const renderCampaigns = (event?: Event) => {
+    const firstVisit = !menuHasOpened;
     const ordered = [...campaigns].sort((a, b) => Number(b.id.startsWith('sg_')) - Number(a.id.startsWith('sg_')));
     menu.innerHTML = `
       <div class="sf-menu-inner">
         <header class="sf-brand-block">
           <img class="sf-brand-mark" src="${import.meta.env.BASE_URL}assets/crimson-eagle-mark.png" width="128" height="128" alt="" />
-          <div><h1>Operation<br>Crimson Eagle</h1><p>Water where the fire needs it.</p></div>
+          <div><h1>Ops Crimson Eagle</h1><p>Water where the fire needs it.</p></div>
         </header>
-        <div class="sf-intro-row"><p class="sf-intro-copy">Fly the sling load. Work the wind. Bring the crew home.</p><span class="sf-live-stamp">SINGLE CREW · TWO THEATRES</span></div>
+        <div class="sf-campaign-section-head"><h2>Choose your campaign</h2><span>02 campaigns</span></div>
         <div class="sf-campaign-grid" data-campaign-grid></div>
-        <footer class="sf-menu-footer"><span>One aircraft. A changing load. A long way home.</span><span>Mobile flight simulation</span></footer>
       </div>`;
     const grid = menu.querySelector<HTMLElement>('[data-campaign-grid]')!;
     ordered.slice(0, 2).forEach((campaign, index) => {
@@ -258,32 +306,42 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
       const card = document.createElement('button');
       card.className = `sf-campaign-card sf-campaign-card--${c.paint}`;
       card.type = 'button';
+      card.dataset.campaign = campaign.id;
       card.setAttribute('aria-label', `Choose ${campaign.name} campaign`);
       card.innerHTML = `
-        <span class="sf-campaign-top"><span class="sf-index">${index ? '02' : '01'}</span><span class="sf-campaign-date">${escapeText(c.evidence)}</span></span>
-        <span class="sf-campaign-art"><img src="${import.meta.env.BASE_URL}assets/${c.paint === 'sg' ? 'sg-lowland.jpg' : 'jp-fireline.jpg'}" alt="" loading="lazy" /></span>
+        <span class="sf-campaign-top"><span class="sf-index">${index ? '02' : '01'}</span><span class="sf-campaign-date">${escapeText(c.date)}</span></span>
         <span class="sf-campaign-title">${escapeText(campaign.name)}</span>
         <span class="sf-campaign-subtitle">${escapeText(campaign.subtitle)}</span>
+        <span class="sf-campaign-art"><img src="${import.meta.env.BASE_URL}assets/${c.paint === 'sg' ? 'seruyan-satellite-fire.webp' : 'ketapang-satellite-fire.webp'}" alt="Satellite-inspired view of ${c.paint === 'sg' ? 'Seruyan' : 'Ketapang'} with fire and smoke" /><span class="sf-region-caption"><b>${escapeText(c.location)}</b><small>Satellite illustration</small></span></span>
         <span class="sf-campaign-copy">${escapeText(c.copy)}</span>
-        <span class="sf-kit-line"><span><small>Aircraft</small><b>${escapeText(campaign.aircraft)}</b></span><i></i><span><small>Home ship</small><b>${escapeText(campaign.shipName)}</b></span></span>
-        <span class="sf-select-line"><span>${escapeText(c.title)}</span><span class="sf-select-arrow">${icon('arrow')}</span></span>`;
-      card.addEventListener('click', () => renderMissions(campaign));
+        ${fleetMarkup(campaign)}
+        <span class="sf-kit-line">${kitMarkup(campaign)}</span>
+        <span class="sf-select-line"><span>View ${campaign.missions.length} missions</span><span class="sf-select-arrow" aria-hidden="true">${icon('arrow')}</span></span>`;
+      card.addEventListener('click', event => renderMissions(campaign, event));
       grid.appendChild(card);
+      loadFleet(campaign);
     });
+    enterMenu(firstVisit ? 'initial' : 'back', event);
+    menuHasOpened = true;
+    if (event && selectedCampaignId) menu.querySelector<HTMLButtonElement>(`[data-campaign="${selectedCampaignId}"]`)?.focus({ preventScroll: true });
   };
 
-  const renderMissions = (campaign: Campaign) => {
+  const renderMissions = (campaign: Campaign, event?: Event) => {
+    selectedCampaignId = campaign.id;
     const c = campaignCopy(campaign);
     const missions = campaign.missions;
     menu.innerHTML = `
       <div class="sf-menu-inner sf-mission-screen">
-        <button class="sf-back-button" type="button" data-back>${icon('arrow')} All operations</button>
-        <div class="sf-mission-heading"><div><h1>${escapeText(c.title)}</h1><p>${escapeText(c.copy)}</p></div><div class="sf-operation-facts"><span><small>Aircraft</small><b>${escapeText(campaign.aircraft)}</b></span><span><small>Ship</small><b>${escapeText(campaign.shipName)}</b></span></div></div>
-        <div class="sf-mission-section-head"><h2>Choose a sortie</h2><span>${missions.length} missions · tap to brief and launch</span></div>
+        <button class="sf-back-button" type="button" data-back>${icon('arrow')} All campaigns</button>
+        <div class="sf-mission-heading"><div><span class="sf-mission-region">${escapeText(c.location)} · ${escapeText(c.date)}</span><h1 tabindex="-1">${escapeText(campaign.name)}</h1><span class="sf-mission-evidence">${escapeText(campaign.subtitle)}</span><p>${escapeText(c.copy)}</p></div><div class="sf-mission-fleet">${fleetMarkup(campaign)}<div class="sf-operation-facts">${kitMarkup(campaign)}</div></div></div>
+        <div class="sf-mission-section-head"><h2>Choose a sortie</h2><span>${missions.length} missions · about 5 minutes each</span></div>
         <div class="sf-mission-list" data-mission-list></div>
-        <footer class="sf-menu-footer"><span>${escapeText(campaign.operator)} · ${escapeText(campaign.aircraft)}</span><span>${escapeText(campaign.name)}</span></footer>
+        <footer class="sf-menu-footer"><span>${escapeText(campaign.operator)}</span><span>${escapeText(c.date)}</span></footer>
       </div>`;
     menu.querySelector('[data-back]')!.addEventListener('click', renderCampaigns);
+    loadFleet(campaign);
+    enterMenu('forward', event);
+    if (event instanceof MouseEvent && event.detail === 0) menu.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true });
     const list = menu.querySelector<HTMLElement>('[data-mission-list]')!;
     let saved: Record<string, { score?: number; outcome?: string }> = {};
     try {
@@ -431,7 +489,8 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
       const x = Math.abs(dx * scale) < .055 ? 0 : dx * scale;
       const y = Math.abs(dy * scale) < .055 ? 0 : dy * scale;
       knob.style.transform = `translate(calc(-50% + ${x * maxTravel}px), calc(-50% - ${y * maxTravel}px))`;
-      if (side === 'left') { setAxis('yaw', x); setAxis('climb', y); }
+      // Positive aircraft yaw turns left; the knob still follows the pointer.
+      if (side === 'left') { setAxis('yaw', -x); setAxis('climb', y); }
       else { setAxis('cyclicX', x); setAxis('cyclicY', y); }
     };
     stick.addEventListener('pointerdown', event => {
@@ -469,7 +528,7 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
       const y = e.key === 'ArrowUp' ? amount : e.key === 'ArrowDown' ? -amount : 0;
       if (side === 'left') { setAxis('yaw', x); setAxis('climb', y); }
       else { setAxis('cyclicX', x); setAxis('cyclicY', y); }
-      knob.style.transform = `translate(calc(-50% + ${x * 30}px), calc(-50% - ${y * 30}px))`;
+      knob.style.transform = `translate(calc(-50% + ${horizontal * 30}px), calc(-50% - ${y * 30}px))`;
     });
     stick.addEventListener('keyup', event => {
       const e = event as KeyboardEvent;
@@ -709,6 +768,8 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     getSceneHost: () => sceneHost,
     dispose() {
       disposed = true;
+      for (const animation of menuAnimations) animation.cancel();
+      menuAnimations.clear();
       releaseSticks();
       callbacks.onControls({ yaw: 0, climb: 0, cyclicX: 0, cyclicY: 0 });
       root.innerHTML = '';

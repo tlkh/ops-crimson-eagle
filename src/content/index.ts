@@ -208,8 +208,8 @@ const japanMissions: Mission[] = [
 export const campaigns: Campaign[] = [
   {
     id: 'sg_fictional_2026_10',
-    name: 'Singapore (fictional)',
-    subtitle: 'Fictional relief mission · 9 October 2026',
+    name: 'RSAF Deployment',
+    subtitle: 'Fictional campaign · October 2026',
     operator: 'Republic of Singapore Air Force',
     aircraft: 'RSAF CH-47F',
     shipName: 'RSS Persistence · Endurance-class LST (209)',
@@ -223,8 +223,8 @@ export const campaigns: Campaign[] = [
   },
   {
     id: 'jp_ketapang_2026_09',
-    name: 'Japan (real)',
-    subtitle: 'Real operation · reconstructed missions · 23–29 September 2026',
+    name: 'JSDF Deployment',
+    subtitle: 'Based on a real deployment · September 2026',
     operator: 'Japan Ground Self-Defense Force',
     aircraft: 'JGSDF CH-47 · represented by a CH-47JA preset',
     shipName: 'JS Kunisaki · Ōsumi-class LST (LST-4003)',

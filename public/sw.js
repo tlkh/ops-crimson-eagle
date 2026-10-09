@@ -1,9 +1,9 @@
-const VERSION = 'crimson-eagle-v3';
+const VERSION = 'crimson-eagle-v4';
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(VERSION).then(cache => cache.addAll([
     './', './index.html', './manifest.webmanifest', './apple-touch-icon.png',
     './icon-192.png', './icon-512.png', './assets/crimson-eagle-mark.png',
-    './assets/sg-lowland.jpg', './assets/jp-fireline.jpg',
+    './assets/seruyan-satellite-fire.webp', './assets/ketapang-satellite-fire.webp',
   ])));
   self.skipWaiting();
 });
