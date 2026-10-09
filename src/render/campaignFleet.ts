@@ -41,12 +41,12 @@ function renderFleet(campaign: Campaign): string {
   let renderer: THREE.WebGLRenderer | undefined;
   let water: ReturnType<typeof createWater> | undefined;
   try {
-    scene.background = new THREE.Color('#b9cdcc');
-    scene.fog = new THREE.Fog('#b9cdcc', 420, 1050);
+    scene.background = new THREE.Color('#cad9df');
+    scene.fog = new THREE.Fog('#cad9df', 360, 1500);
 
     scene.add(new THREE.HemisphereLight('#e7f1eb', '#5e6c70', 2.1));
-    const sun = new THREE.DirectionalLight('#fff0d4', 3.4);
-    sun.position.set(160, 180, 75);
+    const sun = new THREE.DirectionalLight('#fff3df', 2.8);
+    sun.position.set(120, 170, -90);
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
     sun.shadow.camera.left = -135;
@@ -83,17 +83,13 @@ function renderFleet(campaign: Campaign): string {
     scene.add(aircraft.root);
 
     const viewWidth = campaign.shipLength * 1.27;
-    const viewHeight = viewWidth / (WIDTH / HEIGHT);
-    const camera = new THREE.OrthographicCamera(
-      -viewWidth / 2,
-      viewWidth / 2,
-      viewHeight / 2,
-      -viewHeight / 2,
-      .1,
-      1400,
-    );
+    // A long-lens, near-broadside view reveals the real sheer, bridge tiers and
+    // freeboard. The former elevated orthographic view flattened the silhouette
+    // against an all-water background and hid the bow's vertical rake.
+    const camera = new THREE.PerspectiveCamera(18, WIDTH / HEIGHT, .1, 2200);
+    const viewDistance = viewWidth / (2 * Math.tan(THREE.MathUtils.degToRad(9)) * camera.aspect);
     const centerZ = (campaign.id === 'jp_ketapang_2026_09' ? 40 : 35) - campaign.shipLength / 2;
-    camera.position.set(280, 67, centerZ + 20);
+    camera.position.set(viewDistance, 7 + viewDistance * .075, centerZ + 6);
     camera.lookAt(0, 7, centerZ);
     camera.updateProjectionMatrix();
 
@@ -108,7 +104,7 @@ function renderFleet(campaign: Campaign): string {
     renderer.setSize(WIDTH, HEIGHT, false);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.08;
+    renderer.toneMappingExposure = 1.02;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.render(scene, camera);

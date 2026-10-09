@@ -28,7 +28,7 @@
 
 .sf-root *, .sf-root *::before, .sf-root *::after { box-sizing: border-box; }
 .sf-root button { color: inherit; font: inherit; }
-.sf-root button:focus-visible, .sf-root [tabindex="0"]:focus-visible { outline: 2px solid var(--sf-amber); outline-offset: 3px; }
+.sf-root button:focus-visible, .sf-root a:focus-visible, .sf-root [tabindex="0"]:focus-visible { outline: 2px solid var(--sf-amber); outline-offset: 3px; }
 .sf-root ::selection { color: #071313; background: #d7b766; }
 .sf-root ::-webkit-scrollbar { width: 9px; height: 9px; }
 .sf-root ::-webkit-scrollbar-track { background: #14201d; }
@@ -88,6 +88,13 @@
 .sf-select-arrow { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid #a9b39f; border-radius: 50%; }
 .sf-select-arrow svg, .sf-back-button svg, .sf-mission-go svg, .sf-modal-actions svg, .sf-flight-action svg, .sf-icon-button svg, .sf-modal-close svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .sf-menu-footer { display: flex; justify-content: space-between; gap: 16px; margin-top: auto; padding: 20px 0 1px; color: #aab8aa; font-size: 11px; letter-spacing: .025em; }
+.sf-credits { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 24px; margin-top: 28px; padding-top: 14px; border-top: 1px solid #4c5c52; color: #b9c6b8; font-size: 12px; line-height: 1.5; }
+.sf-credits p { margin: 0; padding-block: 8px; }
+.sf-credits strong { color: #e7e4d9; font-weight: 600; }
+.sf-credits-links { display: flex; flex-wrap: wrap; align-items: center; gap: 0 20px; }
+.sf-credits-links a { display: inline-flex; align-items: center; gap: 5px; min-height: 44px; color: #b9c6b8; text-decoration: underline; text-decoration-color: #6d8172; text-underline-offset: 4px; }
+.sf-credits-links a:hover { color: #f0ecdf; text-decoration-color: currentColor; }
+.sf-credits-links .sf-source-link { color: #e7e4d9; }
 .sf-mission-screen { padding-top: 5px; }
 .sf-back-button { width: fit-content; min-height: 44px; display: inline-flex; align-items: center; gap: 9px; border: 0; padding: 13px 0; color: #d5dbc9; background: transparent; font-size: 12px; font-weight: 700; cursor: pointer; }
 .sf-back-button svg { transform: rotate(180deg); }

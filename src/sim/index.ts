@@ -803,13 +803,27 @@ function shipCollision(state: ExtendedSimState, campaign: Campaign, mission: Mis
     Math.abs(z - (japanese ? JAPAN_FLIGHT_DECK_LANDING_Z_OFFSET_M : 0)) <= clamp(length * .22, 18, 42) &&
     speed <= 3.5 && Math.abs(state.velocity.y) <= 3;
 
-  // The forward superstructures project above the flight deck. Their occupied
-  // volumes are far from the designated aft recovery marks on both ships.
+  // Match the separate bridge, boat-bay, funnel and mast envelopes in ships.ts.
+  // Keeping the tiers separate avoids a tall invisible wall over the low island.
+  const station = (fraction: number) => stern - length + fraction * length;
   const structures = japanese
-    ? [{ x: beam * .27, z: stern - length + .47 * length, hw: beam * .39 / 2, hl: length * .245 / 2, top: 16 },
-      { x: beam * .27 - 1, z: stern - length + .445 * length, hw: 5.3, hl: 3, top: 26 }]
-    : [{ x: 0, z: stern - length + .375 * length, hw: beam * .63 / 2, hl: 33 / 2, top: 13 },
-      { x: 0, z: -40.5, hw: beam * .61 / 2, hl: 6, top: 4 }];
+    ? [{ x: beam * .27, z: station(.47), hw: beam * .39 / 2, hl: length * .245 / 2, top: 3.65 },
+      { x: beam * .27, z: station(.392), hw: beam * .20, hl: 8, top: 7.415 },
+      { x: beam * .27, z: station(.48), hw: 3.4, hl: 7, top: 6.45 },
+      { x: beam * .27, z: station(.52), hw: 2.25, hl: 3.25, top: 11.35 },
+      { x: beam * .27 - 1, z: station(.445), hw: 3.5, hl: 1.5, top: 24.15 },
+      { x: beam * .27, z: station(.325), hw: 2.5, hl: 3, top: 2 },
+      { x: beam * .27, z: station(.59), hw: 1.4, hl: 2.2, top: 6.45 },
+      { x: beam * .27, z: station(.545), hw: 3.7, hl: 4, top: 10 }]
+    : [{ x: 0, z: station(.375), hw: beam * .63 / 2, hl: 16.5, top: 5.05 },
+      { x: 0, z: station(.292), hw: beam * .44, hl: 8.5, top: 9.625 },
+      { x: 0, z: -40.5, hw: beam * .61 / 2, hl: 6, top: 3.75 },
+      { x: 0, z: station(.332), hw: 2.4, hl: 2.5, top: 14.9 },
+      { x: 0, z: station(.395), hw: 3.5, hl: 1.5, top: 27.45 },
+      ...[-1, 1].flatMap(side => [
+        { x: side * beam * .42, z: station(.40), hw: 1.7, hl: 12.5, top: 6.85 },
+        { x: side * beam * .42, z: station(.485), hw: 1.5, hl: 2.8, top: 9.425 },
+      ])];
   for (const volume of structures) {
     const bodyHit = Math.abs(x - volume.x) <= volume.hw + 2.7 && Math.abs(z - volume.z) <= volume.hl + 8.2 &&
       state.position.y - 1.5 <= volume.top && state.position.y + 3.2 >= -2.55;
@@ -820,6 +834,33 @@ function shipCollision(state: ExtendedSimState, campaign: Campaign, mission: Mis
     if (bodyHit || rotorHit) return `${campaign.shipName} superstructure strike`;
   }
   // Hull/deck: do not confuse deliberate, slow contact with an impact.
+  if (!japanese) {
+    // Persistence's raised forecastle is no longer at flight-deck height.
+    // Check gear/body contact along the actual sloped bow before it can clip.
+    let forecastleFloor = -Infinity;
+    const stations = [[0, .1], [.045, .55], [.12, .87], [.22, .98], [.34, 1]];
+    for (const [localX, localZ, localY] of [
+      [-1.56, -4.1, -2.52], [1.56, -4.1, -2.52],
+      [-1.56, 5.8, -2.52], [1.56, 5.8, -2.52],
+      [0, -7.7, -1.45], [0, 8.2, -1.2],
+    ]) {
+      const sampleX = x + localX * Math.cos(state.heading) + localZ * Math.sin(state.heading);
+      const sampleZ = z - localX * Math.sin(state.heading) + localZ * Math.cos(state.heading);
+      const fraction = (sampleZ - (stern - length)) / length;
+      if (fraction < 0 || fraction >= .29) continue;
+      const end = stations.findIndex(([f]) => f > fraction);
+      const [f0, w0] = stations[end - 1], [f1, w1] = stations[end];
+      const width = (w0 + (w1 - w0) * (fraction - f0) / (f1 - f0)) * beam / 2;
+      const surfaceY = -2.525 + (1 - fraction / .29) * 3.2;
+      const offsetY = (localX * Math.sin(state.bank) + localY * Math.cos(state.bank)) * Math.cos(state.pitch) +
+        localZ * Math.sin(state.pitch);
+      if (Math.abs(sampleX) <= width) forecastleFloor = Math.max(forecastleFloor, surfaceY - offsetY);
+    }
+    if (state.position.y <= forecastleFloor) {
+      state.position.y = forecastleFloor;
+      return `${campaign.shipName} forecastle impact`;
+    }
+  }
   const nearHull = Math.abs(x) <= beam / 2 + 3.2 && z >= stern - length - 8 && z <= stern + 8;
   const deckStrike = state.position.y <= .05;
   // Outboard tyres and sponsons can touch the safety rail before the aircraft

@@ -596,6 +596,37 @@ describe('aircraft collision and ground clearance', () => {
     expect(state.message).toContain('RSN LST impact');
   });
 
+  it('detects Persistence mast contact above its bridge roof', () => {
+    const { campaign, mission } = makeFixture();
+    const state = createSim(campaign, mission) as ExtendedSimState;
+    state.phase = 'depart';
+    state.position = { x: 0, y: 24, z: -50 };
+    stepSim(state, noInput, campaign, mission);
+    expect(state.failureCause).toBe('collision');
+    expect(state.message).toContain('superstructure');
+  });
+
+  it('keeps the aircraft above Persistence raised forecastle on impact', () => {
+    const { campaign, mission } = makeFixture();
+    const state = createSim(campaign, mission) as ExtendedSimState;
+    state.phase = 'depart';
+    state.position = { x: 0, y: 1, z: -94 };
+    stepSim(state, noInput, campaign, mission);
+    expect(state.failureCause).toBe('collision');
+    expect(state.message).toContain('forecastle');
+    expect(state.position.y).toBeGreaterThan(2);
+  });
+
+  it('allows flight above Kunisaki low aft island without an invisible tall wall', () => {
+    const { campaign, mission } = makeFixture(true);
+    const state = createSim(campaign, mission) as ExtendedSimState;
+    state.phase = 'depart';
+    state.position = { x: 7, y: 14, z: -40 };
+    stepSim(state, noInput, campaign, mission);
+    expect(state.outcome).toBe('none');
+    expect(state.failureCause).not.toBe('collision');
+  });
+
   it('detects a tree at rotor radius even when the cabin clears it', () => {
     const { campaign, mission } = makeFixture();
     setTreeColliders(mission, [{ x: 512, z: 500, ground: 0, height: 20, radius: 4 }]);

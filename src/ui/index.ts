@@ -299,6 +299,14 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
         </header>
         <div class="sf-campaign-section-head"><h2>Choose your campaign</h2><span>02 campaigns</span></div>
         <div class="sf-campaign-grid" data-campaign-grid></div>
+        <footer class="sf-credits">
+          <p>Created by <strong>Timothy Liu</strong></p>
+          <nav class="sf-credits-links" aria-label="Author and project links">
+            <a href="https://github.com/tlkh" target="_blank" rel="noopener noreferrer">GitHub <span>@tlkh</span></a>
+            <a href="https://www.instagram.com/tlkh/" target="_blank" rel="noopener noreferrer">Instagram <span>@tlkh</span></a>
+            <a class="sf-source-link" href="https://github.com/tlkh/ops-crimson-eagle" target="_blank" rel="noopener noreferrer">View source on GitHub <span aria-hidden="true">↗</span></a>
+          </nav>
+        </footer>
       </div>`;
     const grid = menu.querySelector<HTMLElement>('[data-campaign-grid]')!;
     ordered.slice(0, 2).forEach((campaign, index) => {

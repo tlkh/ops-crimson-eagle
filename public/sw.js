@@ -1,4 +1,4 @@
-const VERSION = 'crimson-eagle-v4';
+const VERSION = 'crimson-eagle-v5';
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(VERSION).then(cache => cache.addAll([
     './', './index.html', './manifest.webmanifest', './apple-touch-icon.png',
