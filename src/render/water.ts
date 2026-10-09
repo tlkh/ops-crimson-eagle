@@ -1,0 +1,226 @@
+import * as THREE from 'three';
+import { Reflector } from 'three/addons/objects/Reflector.js';
+import type { Campaign, Mission, SimState } from '../types';
+
+// One small planar reflection is refreshed at a time. The water continues to
+// animate between captures; the original mean surface remains the contact plane.
+const vertexShader = /* glsl */`
+  uniform mat4 textureMatrix;
+  varying vec4 mirrorUv;
+  varying vec3 waterPosition;
+  #include <common>
+  #include <fog_pars_vertex>
+  void main() {
+    waterPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+    mirrorUv = textureMatrix * vec4(position, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    #include <fog_vertex>
+  }
+`;
+
+const fragmentShader = /* glsl */`
+  uniform sampler2D tDiffuse;
+  uniform vec3 color;
+  uniform float time;
+  uniform float kind;
+  uniform float reflectionReady;
+  uniform vec2 wind;
+  uniform vec4 ship;
+  uniform float shipLength;
+  uniform vec3 lake;
+  uniform vec4 coast;
+  uniform float coastStart;
+  uniform vec3 washA;
+  uniform vec3 washB;
+  uniform vec3 bucketRipple;
+  varying vec4 mirrorUv;
+  varying vec3 waterPosition;
+  #include <common>
+  #include <fog_pars_fragment>
+
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
+  float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.0),f.x),f.y);
+  }
+  vec3 noiseGradient(vec2 p) {
+    vec2 i=floor(p), f=fract(p), u=f*f*(3.0-2.0*f), du=6.0*f*(1.0-f);
+    float a=hash(i), b=hash(i+vec2(1,0)), c=hash(i+vec2(0,1)), d=hash(i+1.0);
+    float k=a-b-c+d;
+    return vec3(a+(b-a)*u.x+(c-a)*u.y+k*u.x*u.y,
+      (b-a+k*u.y)*du.x, (c-a+k*u.x)*du.y);
+  }
+  vec2 wave(vec2 p, vec2 d, float k, float speed, float slope) {
+    vec3 swell = noiseGradient(p*.075+d*11.0);
+    float phase = dot(p,d)*k-time*speed + swell.x*5.0;
+    // Analytically fade waves smaller than a pixel, preventing horizon moire.
+    float footprint = length(vec2(dFdx(phase),dFdy(phase)));
+    return (d+swell.yz*.375/k) * cos(phase) * slope * exp(-footprint*footprint*.5);
+  }
+  float wash(vec2 p, vec3 source, out vec2 slope) {
+    vec2 d = p-source.xy; float radius = length(d);
+    float ring = exp(-pow((radius-10.5)/6.5,2.0));
+    float outer = exp(-pow((radius-18.0)/15.0,2.0));
+    float ripple = sin(radius*2.2-time*13.0 + noise(p*.35)*1.6);
+    slope = d/max(radius,.1) * ripple * outer * source.z * .22;
+    return ring * source.z * (.35+.65*noise(p*1.5-time*.9));
+  }
+  void main() {
+    vec2 p = waterPosition.xz;
+    vec3 toEye = cameraPosition-waterPosition;
+    float distanceToEye = length(toEye);
+    vec3 view = normalize(toEye);
+    float sea = 1.0-step(.5,kind);
+    vec2 direction = normalize(wind+vec2(.001));
+    vec2 crosswind = vec2(-direction.y,direction.x);
+    float strength = mix(.52,1.0,sea);
+    float fine = 1.0-smoothstep(80.0,700.0,distanceToEye);
+    vec2 slope = wave(p,direction,.22,.7,.07)*strength;
+    slope += wave(p,normalize(direction+crosswind*.57),.53,1.12,.085)*strength;
+    slope += wave(p,normalize(direction-crosswind*.83),1.23,1.7,.063)*strength;
+    slope += wave(p,crosswind,2.6,2.2,.038)*fine;
+    slope += wave(p,normalize(direction+crosswind*.31),5.1,2.8,.029)*fine;
+    float grain = noise(p*.37-direction*time*.24);
+    slope *= .7+grain*.6;
+
+    vec2 washSlopeA, washSlopeB;
+    float aeration = wash(p,washA,washSlopeA)+wash(p,washB,washSlopeB);
+    slope += washSlopeA+washSlopeB;
+    float bucketDistance = length(p-bucketRipple.xy);
+    slope += normalize(p-bucketRipple.xy+vec2(.01)) * sin(bucketDistance*4.5-time*11.0) *
+      exp(-bucketDistance*.24)*bucketRipple.z*.13;
+
+    // Moored vessel: small reflected wave trains and foam at the waterline,
+    // rather than a fast-moving wake behind a stationary gameplay platform.
+    vec2 shipP = p-ship.xy;
+    float bow = ship.w-shipLength;
+    float width = ship.z * mix(.06,.42,smoothstep(bow,bow+shipLength*.19,shipP.y));
+    float hullDistance = max(abs(shipP.x)-width,max(bow-shipP.y,shipP.y-ship.w));
+    float outsideHull = step(0.0,hullDistance);
+    float hullBand = exp(-max(hullDistance,0.0)*.18)*outsideHull*sea;
+    slope += vec2(sign(shipP.x),.2)*sin(hullDistance*1.5-time*2.1+shipP.y*.12)*hullBand*.09;
+    float foam = exp(-pow((hullDistance-.35)/.75,2.0))*outsideHull*sea*(.06+noise(p*.85-direction*time*.3)*.25);
+    foam += pow(max(0.0,sin(hullDistance*1.4-time*1.7+shipP.y*.12)),12.0)*hullBand*.085;
+
+    // Pale shallow margins follow the same irregular outline as the lake mesh.
+    vec2 lp = p-lake.xy;
+    float angle = atan(-lp.y,lp.x);
+    float lakeRadius = lake.z*(1.02+.025*(1.0+sin(angle*5.0+.8))+.04*pow(max(0.0,cos(angle-PI)),4.0));
+    float lakeEdge = lakeRadius-length(lp);
+    float margin = exp(-max(0.0,lakeEdge)*.13)*step(.5,kind)*(1.0-step(1.5,kind));
+    float along = dot(p-coast.xy,coast.zw);
+    float across = dot(p-coast.xy,vec2(-coast.w,coast.z));
+    float beachDistance = coastStart+34.0*sin(across*.003)+19.0*sin(across*.008+.5)-along;
+    foam += exp(-pow((beachDistance-2.5-sin(time*.8+across*.027)*1.8)/2.5,2.0))*sea*.26;
+    foam += margin*(.10+.12*sin(time*1.5+angle*41.0));
+
+    vec3 normal = normalize(vec3(-slope.x,1.0,-slope.y));
+    float facing = max(.0,dot(view,normal));
+    float fresnel = .07+.70*pow(1.0-facing,4.0);
+    vec3 reflectedDirection = reflect(-view,normal);
+    vec3 sky = mix(vec3(.52,.63,.65),vec3(.25,.45,.57),pow(max(0.0,reflectedDirection.y),.5));
+    vec2 projected = mirrorUv.xy/max(mirrorUv.w,.001);
+    vec2 distortion = slope * .014 * (1.0-smoothstep(500.0,3500.0,distanceToEye));
+    vec2 reflectionUv = clamp(projected+distortion,vec2(.002),vec2(.998));
+    float validUv = step(.001,projected.x)*step(projected.x,.999)*step(.001,projected.y)*step(projected.y,.999);
+    vec3 reflection = mix(sky,texture2D(tDiffuse,reflectionUv).rgb,reflectionReady*validUv);
+    vec3 base = color*(.83+grain*.26);
+    base = mix(base,vec3(.12,.23,.19),margin*.5);
+    vec3 result = mix(base,reflection,fresnel);
+    vec3 sun = normalize(vec3(-.52,.8,-.26));
+    vec3 halfVector = normalize(sun+view);
+    float glint = pow(max(0.0,dot(normal,halfVector)),180.0);
+    result += vec3(1.0,.88,.65)*glint*.75;
+    result = mix(result,vec3(.60,.70,.68),clamp(foam+aeration*.24,0.0,.66));
+    result += vec3(.08,.11,.105)*bucketRipple.z*exp(-pow((bucketDistance-2.0)/1.4,2.0));
+    gl_FragColor = vec4(result,1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+    #include <fog_fragment>
+  }
+`;
+
+export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mission) {
+  const jp = campaign.id === 'jp_ketapang_2026_09';
+  const target = mission.shore ?? mission.lake;
+  const route = new THREE.Vector2(target.x-mission.ship.x,target.z-mission.ship.z);
+  const routeLength = route.length(); route.normalize();
+  const shared = {
+    time: { value: 0 }, wind: { value: new THREE.Vector2(mission.wind.x,mission.wind.z) },
+    ship: { value: new THREE.Vector4(mission.ship.x,mission.ship.z,campaign.shipWidth,jp?40:35) },
+    shipLength: { value: campaign.shipLength },
+    lake: { value: new THREE.Vector3(mission.lake.x,mission.lake.z,mission.lake.radius) },
+    coast: { value: new THREE.Vector4(mission.ship.x,mission.ship.z,route.x,route.y) },
+    coastStart: { value: routeLength*.42 },
+    washA: { value: new THREE.Vector3() }, washB: { value: new THREE.Vector3() },
+    bucketRipple: { value: new THREE.Vector3() },
+  };
+  const surfaces: Array<{ mesh: Reflector; kind: number; captured: boolean; lastCapture: number }> = [];
+  let reflecting = false;
+  let activeKind = 0;
+  const waterColor = (kind: number) => new THREE.Color(kind===0?'#356d73':jp?'#3f6157':'#396c65');
+  const shader = (kind: number) => ({
+    name: 'Crimson reflective water', vertexShader, fragmentShader,
+    uniforms: {
+      ...THREE.UniformsLib.fog, ...shared,
+      color: { value: waterColor(kind) }, tDiffuse: { value: null },
+      textureMatrix: { value: new THREE.Matrix4() },
+      kind: { value: kind }, reflectionReady: { value: 0 },
+    },
+  });
+  function surface(geometry: THREE.BufferGeometry, kind: 0 | 1, position: THREE.Vector3) {
+    const mesh = new Reflector(geometry, { textureWidth: 512, textureHeight: 512, multisample: 0, color: waterColor(kind), shader: shader(kind), clipBias: .002 });
+    mesh.name = kind===0?'Reflective sea':'Reflective freshwater';
+    mesh.rotation.x = -Math.PI/2; mesh.position.copy(position);
+    const material = mesh.material as THREE.ShaderMaterial;
+    material.fog = true;
+    // Reflector clones uniforms; reconnect only the animated environmental values.
+    Object.assign(material.uniforms,shared);
+    const reflectionPass = mesh.onBeforeRender;
+    const entry = {mesh,kind,captured:false,lastCapture:-Infinity};
+    surfaces.push(entry);
+    mesh.onBeforeRender = function(renderer,renderScene,camera,geometry,material,group) {
+      if (reflecting || entry.kind!==activeKind) return;
+      const now = performance.now();
+      if (entry.captured && now-entry.lastCapture<80) return;
+      reflecting = true;
+      const hidden = surfaces.filter(other=>other!==entry && other.mesh.visible);
+      hidden.forEach(other=>other.mesh.visible=false);
+      try {
+        reflectionPass.call(this,renderer,renderScene,camera,geometry,material,group);
+        entry.captured=true; entry.lastCapture=now;
+        (mesh.material as THREE.ShaderMaterial).uniforms.reflectionReady.value=1;
+      } finally {
+        hidden.forEach(other=>other.mesh.visible=true);
+        reflecting=false;
+      }
+    };
+    scene.add(mesh);
+    return mesh;
+  }
+  // Rivers share the surface lighting, without another full scene reflection.
+  const riverMaterial = new THREE.ShaderMaterial({...shader(2),fog:true});
+  Object.assign(riverMaterial.uniforms,shared);
+  return {
+    surface, riverMaterial,
+    update(time: number, state?: SimState) {
+      shared.time.value=time;
+      if (!state) return;
+      const p=state.position;
+      const overLake=Math.hypot(p.x-mission.lake.x,p.z-mission.lake.z)<mission.lake.radius+100;
+      activeKind=overLake?1:0;
+      const height=overLake?.025:-9;
+      const overSea=(p.x-mission.ship.x)*route.x+(p.z-mission.ship.z)*route.y<routeLength*.42;
+      const aboveDeck=Math.abs(p.x-mission.ship.x)<campaign.shipWidth*.6 && p.z-mission.ship.z>(jp?40:35)-campaign.shipLength && p.z-mission.ship.z<(jp?40:35);
+      const strength=(overLake||overSea)&&!aboveDeck&&state.phase!=='failed'
+        ? THREE.MathUtils.clamp(1-(p.y-height)/65,0,1)**1.5 : 0;
+      const sin=Math.sin(state.heading), cos=Math.cos(state.heading);
+      shared.washA.value.set(p.x-sin*5.7,p.z-cos*5.7,strength);
+      shared.washB.value.set(p.x+sin*6.15,p.z+cos*6.15,strength);
+      const bucketWet=state.bucketAttached&&overLake ? THREE.MathUtils.clamp(1-Math.abs(state.bucket.y-.025)/3,0,1):0;
+      shared.bucketRipple.value.set(state.bucket.x,state.bucket.z,bucketWet);
+    },
+    dispose() { surfaces.forEach(({mesh})=>mesh.dispose()); riverMaterial.dispose(); },
+  };
+}

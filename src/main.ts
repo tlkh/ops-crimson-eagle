@@ -1,0 +1,197 @@
+import { campaigns, getCampaign, getMission, validateContent } from './content';
+import { createSim, distance2D, estimateLandingFuel, getObjectiveAction, stepSim } from './sim';
+import { createScene } from './render';
+import { createUI } from './ui';
+import { clearCheckpoint, loadCheckpoint, saveCheckpoint, writeProgress } from './persistence';
+import { GameAudio } from './audio';
+import type { Campaign, CampaignId, FlightCommand, Mission, SimState } from './types';
+import './style.css';
+
+const root = document.getElementById('app');
+if (!root) throw new Error('Application root missing');
+const contentErrors = validateContent();
+if (contentErrors.length) throw new Error(`Scenario data invalid: ${contentErrors.join('; ')}`);
+
+const emptyCommand = (): FlightCommand => ({ yaw: 0, climb: 0, cyclicX: 0, cyclicY: 0, drop: false, fetch: false, faceObjective: false, returnHome: false, action: false });
+let command = emptyCommand();
+let state: SimState | null = null;
+let campaign: Campaign | null = null;
+let mission: Mission | null = null;
+let scene: ReturnType<typeof createScene> | null = null;
+let paused = true;
+let mapOpen = false;
+let accumulator = 0;
+let lastFrame = performance.now();
+let lastSaveTime = 0;
+let lastPhase = '';
+let saving = Promise.resolve();
+const audio = new GameAudio();
+
+const ui = createUI(root, {
+  onSelect: (campaignId, missionId) => { audio.unlock(); void selectMission(campaignId, missionId); },
+  onCommand: name => { if (name === 'resume' || name === 'drop') audio.unlock(); void act(name); },
+  onControls: partial => { command = { ...command, ...partial }; },
+}, campaigns);
+
+function queueSave() {
+  if (!state) return;
+  const snapshot = structuredClone(state);
+  saving = saving.catch(() => undefined).then(() => saveCheckpoint(snapshot));
+}
+
+function clearInput() {
+  command = emptyCommand();
+}
+
+async function selectMission(campaignId: CampaignId, missionId: string) {
+  queueSave();
+  const nextCampaign = getCampaign(campaignId);
+  const nextMission = getMission(campaignId, missionId);
+  if (!nextCampaign || !nextMission) return;
+  await saving.catch(() => undefined);
+  const saved = await loadCheckpoint(campaignId);
+  campaign = nextCampaign;
+  mission = nextMission;
+  state = saved?.missionId === missionId && saved.phase !== 'debrief' && saved.phase !== 'failed'
+    ? saved : createSim(nextCampaign, nextMission);
+  scene?.dispose();
+  scene = createScene(ui.getSceneHost());
+  clearInput();
+  paused = false;
+  mapOpen = false;
+  accumulator = 0;
+  lastFrame = performance.now();
+  lastPhase = state.phase;
+  ui.showGame(state, campaign, mission, estimateLandingFuel(state, campaign, mission));
+  ui.setPaused(false);
+}
+
+async function act(name: string) {
+  if (name === 'menu') {
+    queueSave();
+    await saving.catch(() => undefined);
+    paused = true;
+    clearInput();
+    scene?.dispose(); scene = null;
+    state = null; campaign = null; mission = null;
+    ui.showMenu();
+    return;
+  }
+  if (!state || !campaign || !mission) return;
+  if (name === 'restart') {
+    await saving.catch(() => undefined);
+    await clearCheckpoint(campaign.id);
+    state = createSim(campaign, mission);
+    paused = false; mapOpen = false; clearInput(); accumulator = 0;
+    ui.setPaused(false);
+    return;
+  }
+  if (name === 'map') { mapOpen = !mapOpen; paused = mapOpen; clearInput(); return; }
+  if (name === 'togglePause' || name === 'resume') { paused = name === 'resume' ? false : !paused; mapOpen = false; clearInput(); ui.setPaused(paused); if (paused) queueSave(); return; }
+  if (paused) return;
+  if (name === 'drop') command.drop = true;
+  if (name === 'fetch') command.fetch = true;
+  if (name === 'faceObjective') command.faceObjective = true;
+  if (name === 'action') command.action = true;
+  if (name === 'return') command.returnHome = true;
+}
+
+const keys = new Set<string>();
+window.addEventListener('keydown', event => {
+  const key = event.key.toLowerCase();
+  if (!state || state.phase === 'debrief' || state.phase === 'failed') return;
+  if (key === 'escape') {
+    event.preventDefault();
+    void act(mapOpen ? 'map' : 'togglePause');
+    return;
+  }
+  if (paused || mapOpen || (event.target instanceof Element && event.target.closest('button, input, select, textarea, [role="group"]'))) return;
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(event.key)) event.preventDefault();
+  keys.add(key);
+  if (event.repeat) return;
+  if (key === ' ') void act('drop');
+  if (key === 'f') void act('faceObjective');
+  if (key === 'e' && campaign && mission) {
+    const opportunity = getObjectiveAction(state, campaign, mission);
+    if (opportunity === 'fetch') void act('fetch');
+    else if (opportunity === 'release') void act('drop');
+    else if (opportunity) void act('action');
+  }
+  if (key === 'r') void act('return');
+  if (key === 'm') void act('map');
+});
+window.addEventListener('keyup', event => keys.delete(event.key.toLowerCase()));
+window.addEventListener('blur', () => { keys.clear(); clearInput(); });
+
+function keyboardCommand(): FlightCommand {
+  return {
+    ...command,
+    yaw: Math.max(-1, Math.min(1, command.yaw + Number(keys.has('a')) - Number(keys.has('d')))),
+    climb: Math.max(-1, Math.min(1, command.climb + Number(keys.has('w')) - Number(keys.has('s')))),
+    cyclicX: Math.max(-1, Math.min(1, command.cyclicX + Number(keys.has('arrowright')) - Number(keys.has('arrowleft')))),
+    cyclicY: Math.max(-1, Math.min(1, command.cyclicY + Number(keys.has('arrowup')) - Number(keys.has('arrowdown')))),
+  };
+}
+
+function frame(now: number) {
+  const elapsed = Math.min(0.1, Math.max(0, (now - lastFrame) / 1000));
+  lastFrame = now;
+  if (state && campaign && mission) {
+    if (!paused && state.phase !== 'debrief' && state.phase !== 'failed') {
+      accumulator += elapsed;
+      let steps = 0;
+      while (accumulator >= 1 / 60 && steps < 8) {
+        const cmd = keyboardCommand();
+        state = stepSim(state, cmd, campaign, mission);
+        command.drop = false; command.fetch = false; command.faceObjective = false;
+        command.action = false; command.returnHome = false;
+        accumulator -= 1 / 60;
+        steps++;
+      }
+      if (steps === 8 && accumulator > 0.2) accumulator = 0.2;
+      if (state.phase !== lastPhase || now - lastSaveTime > 15000) {
+        queueSave();
+        lastPhase = state.phase;
+        lastSaveTime = now;
+      }
+      if (state.outcome !== 'none') writeProgress(state);
+    }
+    scene?.update(state, campaign, mission);
+    ui.showGame(state, campaign, mission, estimateLandingFuel(state, campaign, mission));
+    if (state.phase === 'debrief' || state.phase === 'failed') paused = true;
+    if (mapOpen) {
+      const d = distance2D(state.position, { ...mission.fire, y: 0 });
+      root?.setAttribute('data-map-distance', `${Math.round(d)} m`);
+    }
+  }
+  audio.update(state, paused);
+  requestAnimationFrame(frame);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && state) { paused = true; mapOpen = false; clearInput(); ui.setPaused(true); queueSave(); }
+});
+window.addEventListener('pagehide', () => { if (state) queueSave(); });
+window.addEventListener('orientationchange', clearInput);
+root.addEventListener('webglcontextlost', event => {
+  event.preventDefault();
+  paused = true;
+  clearInput();
+  ui.setPaused(true);
+  queueSave();
+});
+root.addEventListener('webglcontextrestored', () => {
+  if (state && campaign && mission) {
+    scene?.dispose();
+    scene = createScene(ui.getSceneHost());
+    paused = true;
+    ui.setPaused(true);
+  }
+});
+ui.showMenu();
+requestAnimationFrame(frame);
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => undefined);
+  });
+}
