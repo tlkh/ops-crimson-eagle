@@ -58,6 +58,7 @@ Keep gameplay authoritative in the simulation. Render code consumes state; it mu
 - `state.bucket` is the **center of the open rim**, not the bucket bottom. Shared dimensions belong in `src/sim/bucket.ts`; do not duplicate inconsistent constants in render or UI code.
 - Current dimensions: body height **1.48 m**, lift point **0.85 m above the rim**, hook **1.76 m below aircraft origin**, maximum sling length **22 m**.
 - The rope is a one-sided length constraint: gravity and momentum move the bucket, tension limits its distance when taut, and it can slacken when resting. Avoid snapping the bucket to a permanently vertical offset.
+- Damp taut-sling swing relative to the moving hook, preserving inward radial velocity so the rope can slacken. World-space horizontal drag creates persistent trailing during cruise.
 - Ground clearance samples the bucket footprint against the applicable terrain, deck, apron, or pad. Maintain agreement between visible surfaces and simulation heights so neither bucket nor aircraft clips through them.
 - Water contact uses the bucket body bottom against the lake surface within its circular boundary. Filling also requires an attached bucket, an explicit fetching action, and sufficiently low horizontal bucket speed; load remains limited by maximum gross mass.
 - Released water travels as simulation packets and affects fire on impact. Keep the rendered stream, capacity bar, water mass, and fire response synchronized with that state.
@@ -68,6 +69,7 @@ Keep gameplay authoritative in the simulation. Render code consumes state; it mu
 - **Face objective** changes heading only; manual axis input cancels it. **Set return** changes the destination without flying the route. There is no route autopilot or hover-assist control.
 - Context actions appear only near their respective zones. A bounded final alignment assist may position the aircraft for that action; do not extend it into automatic travel between objectives.
 - The left joystick uses **yaw = -pointer X** and collective/climb = pointer Y after screen-Y normalization. Its knob follows the pointer visually. Keyboard A/D turn left/right; preserve the same direction for focused joystick keyboard controls.
+- `src/ui/stickResponse.ts` applies a radial deadzone and gentle response curve to virtual sticks, with separate yaw/cyclic/collective limits. Keep visual knob travel direct and global flight keyboard inputs independent of those virtual-stick limits.
 - Reset active inputs on pointer release/cancel/lost capture, pause, blur, visibility changes, and orientation changes. Global shortcuts must not override focused UI controls.
 - Unsafe contact with terrain, trees, ships, structures, or water causes an explosion and mission failure. Controlled landings on designated deck/shore areas are explicit exceptions. Fix geometry/contact math rather than disabling collision to hide clipping.
 - Rendered terrain and collision use the same triangulated height grid. Trees and structures register colliders from their actual generated placement; keep these aligned when changing models or world generation. Collision caches depend on the `Mission` object identity.
@@ -77,6 +79,7 @@ Keep gameplay authoritative in the simulation. Render code consumes state; it mu
 - Reuse the gameplay models for menu fleet views. The portrait renderer is temporary and cached; dispose its GPU resources after capturing the image.
 - Dispose replaced scenes, materials, geometry, textures, and listeners. Prefer reuse or instancing to creating objects every frame. Preserve WebGL context-loss recovery.
 - Check aircraft changes from the player's rear chase view as well as side view. Preserve the closed, tapered rear and the requested green rear finish; do not reintroduce open-ramp gaps or stray roof/gear shapes.
+- Ground-layer aerial perspective is patched per material in `src/render/heightFog.ts`, alongside the existing smoke/distance fog. Preserve existing shader hooks; calculate view-ray length per fragment so large water polygons remain clear nearby. Menu portraits do not use this layer.
 - Keep equipment names readable without truncation, reserve image dimensions before asynchronous loading, and retain clear next-step mission cues.
 - Respect reduced motion, maintain keyboard focus across menu transitions, and keep touch controls usable at phone sizes. Ground crew and gameplay effects should follow simulation time so they freeze when paused.
 - Audio unlocks on a user gesture; essential feedback must remain understandable when muted.

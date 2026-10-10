@@ -123,6 +123,43 @@ describe('simulation mass and pickup rules', () => {
     expect(state.bucket.z).toBeLessThan(state.position.z - 1);
   });
 
+  it('damps post-maneuver bucket oscillation while retaining slack and a bounded sling', () => {
+    const { campaign, mission } = makeFixture();
+    for (const full of [false, true]) {
+      const state = createSim(campaign, mission);
+      state.bucketAttached = true;
+      state.bucketLocation = 'aircraft';
+      state.phase = 'transit';
+      state.position = { x: 0, y: 80, z: 0 };
+      state.bucket = { x: 0, y: 59, z: 0 };
+      state.bucketVelocity = { x: 0, y: 0, z: 0 };
+      if (full) state.waterLitres = campaign.mass.maxGross - grossMass(state, campaign);
+
+      const horizontalOffset: number[] = [];
+      for (let i = 0; i < 2_400; i += 1) {
+        const cyclicY = i < 240 ? 1 : i < 600 ? 0 : i < 840 ? -1 : 0;
+        stepSim(state, { ...noInput, cyclicY }, campaign, mission);
+        const hook = getBucketHook(state);
+        const rope = Math.hypot(state.bucket.x - hook.x,
+          state.bucket.y + BUCKET_LIFT_OFFSET_M - hook.y, state.bucket.z - hook.z);
+        expect(rope).toBeLessThanOrEqual(SLING_LENGTH_M + 0.02);
+        expect(state.bucket.y).toBeGreaterThanOrEqual(
+          bucketMinimumRimHeight(campaign, mission, state.bucket.x, state.bucket.z) - 1e-6);
+        expect(Number.isFinite(state.bucketVelocity.x + state.bucketVelocity.y + state.bucketVelocity.z)).toBe(true);
+        horizontalOffset.push(Math.hypot(state.bucket.x - hook.x, state.bucket.z - hook.z));
+      }
+
+      const peakDuringManeuver = Math.max(...horizontalOffset.slice(0, 840));
+      const mean = (start: number, end: number) =>
+        horizontalOffset.slice(start, end).reduce((sum, value) => sum + value, 0) / (end - start);
+      const earlierOscillation = mean(1_440, 1_800);
+      const laterOscillation = mean(2_040, 2_400);
+      expect(peakDuringManeuver).toBeGreaterThan(5); // The sling still lags the aircraft visibly.
+      expect(peakDuringManeuver).toBeLessThan(19); // Avoid a near-horizontal swing at this profile.
+      expect(laterOscillation).toBeLessThan(earlierOscillation * 0.4);
+    }
+  });
+
   it('keeps the bucket body above both deck and sloping terrain', () => {
     const { campaign, mission } = makeFixture();
     const state = createSim(campaign, mission);

@@ -7,6 +7,7 @@ import { createWorld } from './world';
 import { createShip } from './ships';
 import { createBucketRig } from './bucket';
 import { createGroundCrew } from './groundCrew';
+import { createHeightFog } from './heightFog';
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
@@ -221,7 +222,11 @@ export function createScene(container: HTMLElement): {
       } else camera.position.lerp(cameraWant, 1 - Math.exp(-delta * 2.6));
       if (!firstFrame) cameraLook.lerp(cameraAim, 1 - Math.exp(-delta * 2.6));
       camera.lookAt(cameraLook);
-      camera.fov = clamp(53 + Math.hypot(latestState.velocity.x, latestState.velocity.z) * .022, 53, 62);
+      // A gentle widening above the working altitude reveals more of the
+      // receding terrain. Keep the landing/dipping view and near bucket stable.
+      const heightAboveGround = Math.max(0, pos.y - world.terrainHeight(pos.x, pos.z));
+      const altitudeFraming = THREE.MathUtils.smoothstep(heightAboveGround, 80, 320) * 3;
+      camera.fov = clamp(53 + Math.hypot(latestState.velocity.x, latestState.velocity.z) * .022 + altitudeFraming, 53, 62);
       camera.updateProjectionMatrix();
       camera.updateMatrixWorld();
       // Project below the rear landing gear so the load meter follows the Chinook.
@@ -294,6 +299,7 @@ export function createScene(container: HTMLElement): {
         groundCrew = createGroundCrew(scene, campaign, mission);
         fire = createFire(scene, mission, world.terrainHeight);
         crashEffect = createCrashEffect(scene);
+        createHeightFog(campaign.id === 'jp_ketapang_2026_09').apply(scene);
         firstFrame = true;
         dropFraming = 0;
       } else {

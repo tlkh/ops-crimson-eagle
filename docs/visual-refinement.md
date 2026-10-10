@@ -17,3 +17,9 @@ The images below are from temporary fixed camera views of the real rendering mod
 ![Kunisaki hull, deck and reflection](visual-checks/kunisaki-waterline.jpg)
 
 ![Wildfire smoke, flames and feathered burn scar](visual-checks/fire-atmosphere.jpg)
+
+## Flight feel and altitude — 10 October 2026
+
+Ground-layer haze now integrates an exponentially thinning atmosphere along the view ray. It uses the current atmospheric fog colour, including local smoke tint, while keeping the foreground clear. Shader hooks compose with instanced fire and burn-scar materials; no extra render pass is required. Ray length is calculated per fragment to avoid excessive fog on nearby parts of the large sea plane. The chase view also widens gradually by up to three degrees between 80 and 320 metres above terrain, revealing more ground as the aircraft climbs.
+
+Taut-sling damping now acts on tangential velocity relative to the moving hook. Inward velocity, slack, gravity, surface contact, and the 22-metre length constraint remain active. Empty and loaded acceleration/reversal regressions check settling and clearance. Virtual joysticks use a 6.5% radial deadzone and smooth response, with maximum yaw/cyclic/collective commands of 68%/78%/86%; the knob still follows the pointer directly and release immediately clears the commands.

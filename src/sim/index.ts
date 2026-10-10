@@ -307,7 +307,15 @@ function updateAttitudeAndFlight(
   return actualAccel;
 }
 
-function updateBucket(state: ExtendedSimState, campaign: Campaign, mission: Mission, dt: number): void {
+const BUCKET_TANGENTIAL_DAMPING_PER_SEC = 0.3;
+
+function updateBucket(
+  state: ExtendedSimState,
+  campaign: Campaign,
+  mission: Mission,
+  hookVelocity: Vec3,
+  dt: number,
+): void {
   if (!state.bucketAttached || state.bucketLocation !== 'aircraft') {
     // Retain the place where crews set it down. Resetting x/z to a marker
     // would make a detached bucket jump across the pad.
@@ -321,9 +329,11 @@ function updateBucket(state: ExtendedSimState, campaign: Campaign, mission: Miss
   const old = copyVec(state.bucket);
   const velocity = state.bucketVelocity;
   const atRest = old.y <= bucketMinimumRimHeight(campaign, mission, old.x, old.z) + 0.005;
-  const drag = Math.exp(-(atRest ? 5.5 : 0.12) * dt);
-  velocity.x *= drag;
-  velocity.z *= drag;
+  if (atRest) {
+    const groundDrag = Math.exp(-5.5 * dt);
+    velocity.x *= groundDrag;
+    velocity.z *= groundDrag;
+  }
   velocity.y = (velocity.y - 9.81 * dt) * Math.exp(-0.08 * dt);
   state.bucket.x += velocity.x * dt;
   state.bucket.y += velocity.y * dt;
@@ -352,7 +362,38 @@ function updateBucket(state: ExtendedSimState, campaign: Campaign, mission: Miss
     y: clamp((state.bucket.y - old.y) / dt, -45, 45),
     z: clamp((state.bucket.z - old.z) / dt, -45, 45),
   };
-  if (state.bucket.y <= floor + 0.005) state.bucketVelocity.y = 0;
+  const onSurface = state.bucket.y <= floor + 0.005;
+  if (onSurface) {
+    state.bucketVelocity.y = 0;
+  } else {
+    // At a taut rope, damp motion along the rope's tangent relative to the
+    // moving hook. World-space drag would make a bucket trail at cruise speed.
+    const liftPointY = state.bucket.y + BUCKET_LIFT_OFFSET_M;
+    const dx = state.bucket.x - hook.x;
+    const dy = liftPointY - hook.y;
+    const dz = state.bucket.z - hook.z;
+    const ropeLength = Math.hypot(dx, dy, dz);
+    if (ropeLength >= SLING_LENGTH_M - 0.02) {
+      const nx = dx / ropeLength;
+      const ny = dy / ropeLength;
+      const nz = dz / ropeLength;
+      const relativeX = state.bucketVelocity.x - hookVelocity.x;
+      const relativeY = state.bucketVelocity.y - hookVelocity.y;
+      const relativeZ = state.bucketVelocity.z - hookVelocity.z;
+      const radialSpeed = relativeX * nx + relativeY * ny + relativeZ * nz;
+      const tangentX = relativeX - nx * radialSpeed;
+      const tangentY = relativeY - ny * radialSpeed;
+      const tangentZ = relativeZ - nz * radialSpeed;
+      // The rope removes outward radial speed, while inward speed may slacken it.
+      const allowedRadialSpeed = Math.min(0, radialSpeed);
+      const tangentDamping = Math.exp(-BUCKET_TANGENTIAL_DAMPING_PER_SEC * dt);
+      state.bucketVelocity = {
+        x: hookVelocity.x + nx * allowedRadialSpeed + tangentX * tangentDamping,
+        y: hookVelocity.y + ny * allowedRadialSpeed + tangentY * tangentDamping,
+        z: hookVelocity.z + nz * allowedRadialSpeed + tangentZ * tangentDamping,
+      };
+    }
+  }
 }
 
 function updateRigging(
@@ -1029,9 +1070,16 @@ export function stepSim(
   state.timeSec += step;
   const priorPosition = copyVec(state.position);
   const flightCommand = withLocalGuidance(state, command, campaign, mission);
+  const previousHook = getBucketHook(state);
   updateAttitudeAndFlight(state, flightCommand, campaign, mission, step);
   if (checkCollision(state, campaign, mission)) return state;
-  updateBucket(state, campaign, mission, step);
+  const currentHook = getBucketHook(state);
+  const hookVelocity = {
+    x: (currentHook.x - previousHook.x) / step,
+    y: (currentHook.y - previousHook.y) / step,
+    z: (currentHook.z - previousHook.z) / step,
+  };
+  updateBucket(state, campaign, mission, hookVelocity, step);
 
   // Continuous fuel use also covers the engine-running deck/shore handling time.
   state.fuelKg = Math.max(0, state.fuelKg - effectiveBurnKgPerMin(state) * step / 60);

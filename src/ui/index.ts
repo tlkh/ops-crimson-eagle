@@ -3,6 +3,7 @@ import type { ExtendedSimState } from '../sim/types';
 import { getObjectiveAction } from '../sim';
 import { createFlightHud } from './flightHud';
 import { isBucketTouchingLake } from '../sim/bucket';
+import { FLIGHT_STICK_RESPONSE, mapStickResponse, normalizeStickVector } from './stickResponse';
 
 type Callbacks = {
   onSelect(campaignId: CampaignId, missionId: string): void;
@@ -490,16 +491,16 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     const updateStick = (event: PointerEvent) => {
       const rect = stick.getBoundingClientRect();
       const maxTravel = rect.width * .32;
-      const dx = clamp((event.clientX - (rect.left + rect.width / 2)) / maxTravel, -1, 1);
-      const dy = clamp(((rect.top + rect.height / 2) - event.clientY) / maxTravel, -1, 1);
-      const magnitude = Math.hypot(dx, dy);
-      const scale = magnitude > 1 ? 1 / magnitude : 1;
-      const x = Math.abs(dx * scale) < .055 ? 0 : dx * scale;
-      const y = Math.abs(dy * scale) < .055 ? 0 : dy * scale;
-      knob.style.transform = `translate(calc(-50% + ${x * maxTravel}px), calc(-50% - ${y * maxTravel}px))`;
+      const rawX = (event.clientX - (rect.left + rect.width / 2)) / maxTravel;
+      const rawY = ((rect.top + rect.height / 2) - event.clientY) / maxTravel;
+      const position = normalizeStickVector(rawX, rawY);
+      const response = side === 'left'
+        ? mapStickResponse(rawX, rawY, FLIGHT_STICK_RESPONSE.yawLimit, FLIGHT_STICK_RESPONSE.collectiveLimit)
+        : mapStickResponse(rawX, rawY, FLIGHT_STICK_RESPONSE.cyclicLimit, FLIGHT_STICK_RESPONSE.cyclicLimit);
+      knob.style.transform = `translate(calc(-50% + ${position.x * maxTravel}px), calc(-50% - ${position.y * maxTravel}px))`;
       // Positive aircraft yaw turns left; the knob still follows the pointer.
-      if (side === 'left') { setAxis('yaw', -x); setAxis('climb', y); }
-      else { setAxis('cyclicX', x); setAxis('cyclicY', y); }
+      if (side === 'left') { setAxis('yaw', -response.x); setAxis('climb', response.y); }
+      else { setAxis('cyclicX', response.x); setAxis('cyclicY', response.y); }
     };
     stick.addEventListener('pointerdown', event => {
       const e = event as PointerEvent;
@@ -532,11 +533,15 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
       e.preventDefault();
       e.stopPropagation();
       const horizontal = e.key === 'ArrowLeft' ? -amount : e.key === 'ArrowRight' ? amount : 0;
-      const x = side === 'left' ? -horizontal : horizontal;
       const y = e.key === 'ArrowUp' ? amount : e.key === 'ArrowDown' ? -amount : 0;
-      if (side === 'left') { setAxis('yaw', x); setAxis('climb', y); }
-      else { setAxis('cyclicX', x); setAxis('cyclicY', y); }
-      knob.style.transform = `translate(calc(-50% + ${horizontal * 30}px), calc(-50% - ${y * 30}px))`;
+      const response = side === 'left'
+        ? mapStickResponse(horizontal, y, FLIGHT_STICK_RESPONSE.yawLimit, FLIGHT_STICK_RESPONSE.collectiveLimit)
+        : mapStickResponse(horizontal, y, FLIGHT_STICK_RESPONSE.cyclicLimit, FLIGHT_STICK_RESPONSE.cyclicLimit);
+      if (side === 'left') { setAxis('yaw', -response.x); setAxis('climb', response.y); }
+      else { setAxis('cyclicX', response.x); setAxis('cyclicY', response.y); }
+      const maxTravel = stick.getBoundingClientRect().width * .32;
+      const position = normalizeStickVector(horizontal, y);
+      knob.style.transform = `translate(calc(-50% + ${position.x * maxTravel}px), calc(-50% - ${position.y * maxTravel}px))`;
     });
     stick.addEventListener('keyup', event => {
       const e = event as KeyboardEvent;
