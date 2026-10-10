@@ -24,6 +24,8 @@ Follow the objective cues, manage the swinging bucket and water load, and watch 
 | R | Set the return route |
 | M / Escape | Map / pause |
 
+Tap flight keys for small corrections; hold them to build input gradually. Keyboard turning, climb, and movement have gentler maximum inputs, and releasing a key immediately centres its command. Aircraft momentum still takes time to settle.
+
 Touch controls provide two joysticks: collective/yaw on the left and cyclic movement on the right, plus on-screen action buttons. The flight HUD gives a clear observation step after the last water drop; once crews secure the fire, it advances to recovery.
 
 Singapore ship recovery requires carrying the bucket over the flight deck before descending vertically onto the marked spot. The ship menu preview shows a top-down view of the mission map and its labeled locations. Each sortie moves through its assigned time of day, with matching sky, sunlight, night lighting, and subtle proximity effects.

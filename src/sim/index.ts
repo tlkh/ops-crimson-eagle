@@ -6,6 +6,7 @@ import { BUCKET_BODY_HEIGHT_M, BUCKET_FLOAT_RIM_M, BUCKET_HOOK_OFFSET_M, BUCKET_
   SLING_LENGTH_M, bucketReadyForDeckRecovery, bucketCrossesShipSide, bucketMinimumRimHeight, bucketSurfaceHeight, getBucketHook, isBucketTouchingLake } from './bucket';
 import { shipLandingLocalZ, shipLandingPoint } from './shipLanding';
 import { WORLD_REVISION } from '../worldRevision';
+import { isWithinLakeOutline } from './lakeShape';
 
 export type { ExtendedSimState, WaterPacket } from './types';
 
@@ -300,7 +301,9 @@ function updateAttitudeAndFlight(
   return actualAccel;
 }
 
-const BUCKET_TANGENTIAL_DAMPING_PER_SEC = 0.3;
+// Settle sling swing quickly so the load stays composed beneath the aircraft
+// during small control inputs, while retaining a little lag in sustained turns.
+const BUCKET_TANGENTIAL_DAMPING_PER_SEC = 0.4;
 
 function updateBucket(
   state: ExtendedSimState,
@@ -822,7 +825,7 @@ function groundContactHeight(state: SimState, campaign: Campaign, mission: Missi
     const x = state.position.x + localX * cos + localZ * sin;
     const z = state.position.z - localX * sin + localZ * cos;
     let surface = renderedTerrainHeight(campaign, mission, x, z) ?? -9;
-    if (distance2D({ x, z }, mission.lake) <= mission.lake.radius * 1.01) surface = Math.max(surface, .025);
+    if (isWithinLakeOutline(campaign.id, mission.lake, { x, z })) surface = Math.max(surface, .025);
     if (mission.shore && distance2D({ x, z }, mission.shore) <= 30) surface = Math.max(surface, 0);
     // Renderer uses Euler order YXZ: bank around local Z, then -pitch around X.
     const offsetY = (localX * Math.sin(state.bank) + localY * Math.cos(state.bank)) * Math.cos(state.pitch) +
@@ -957,7 +960,7 @@ function checkCollision(state: ExtendedSimState, campaign: Campaign, mission: Mi
         if (speed <= 2.5) { state.velocity.x = 0; state.velocity.z = 0; }
       }
     } else {
-      const onLake = distance2D(state.position, mission.lake) <= mission.lake.radius;
+      const onLake = isWithinLakeOutline(campaign.id, mission.lake, state.position);
       return crash(state, onLake ? 'Water impact' : groundFloor < -4 ? 'Sea impact' : 'Terrain impact', groundFloor);
     }
   }

@@ -607,6 +607,7 @@ export function createCoastalDetails(
       root.traverse(object => {
         const mesh = object as THREE.Mesh;
         if (!mesh.isMesh) return;
+        if (mesh instanceof THREE.InstancedMesh) mesh.dispose();
         mesh.geometry.dispose();
         const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         mats.forEach(mat => mat.dispose());

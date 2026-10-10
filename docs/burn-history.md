@@ -8,7 +8,9 @@ upwind, with uneven lobes, singed edges and irregular unburned islands.
 `src/render/burnField.ts` generates one 256×256 linear RGBA field: severity,
 age (one means older), active-edge weighting and eligible land. CPU bilinear
 samples and GPU texel centers agree. The world builds the field once, excluding
-water, protected land-use zones and the actual support-pad/airport footprints.
+water, protected settlements/crops and actual support-pad/airport footprints.
+Road corridors stay eligible, and the road, shoulder, junction and bridge
+materials sample the same burn field so a road does not erase a scar beneath it.
 The airport's 900-metre tree-clearance circle is deliberately **not** a burn
 exclusion: two authored fire targets lie within that circle.
 

@@ -313,7 +313,7 @@ export function createShip(scene: THREE.Scene, campaign: Campaign, mission: Miss
     house(g,B*.63,7.6,33,0,DECK,s(.375),steel,.8,1);
     // Full forward face supports the bridge wings; the previous bridge floated over the bow.
     house(g,B*.73,7.6,16,0,DECK,s(.292),steel,.55,.4);
-    house(g,B*.83,4.3,16,0,DECK+7.6,s(.292),light,.55,.4);
+    house(g,B*.83,4.3,16,0,DECK+7.6,s(.292),steel,.55,.4);
     box(g,B*.88,.35,17,0,DECK+12,s(.292),steel);
     box(g,B*.76,1.3,.12,0,DECK+10.6,s(.292)-7.30,dark);
     for(const side of [-1,1])box(g,.1,1.35,10,side*(B*.415-.38),DECK+10.6,s(.292),dark);

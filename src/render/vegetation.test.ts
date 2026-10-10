@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import type { Campaign, Mission } from '../types';
 import type { BurnField } from './burnField';
@@ -27,7 +27,11 @@ const campaign = {
   missions: [mission],
 } as Campaign;
 
-function context(visualTier: 'full' | 'reduced', burnField?: BurnField): VegetationContext {
+function context(
+  visualTier: 'full' | 'reduced',
+  burnField?: BurnField,
+  roadsideRoads: VegetationContext['roadsideRoads'] = [],
+): VegetationContext {
   const fromLocal = (t: number, s: number) => ({ x: t, z: s });
   return {
     fromLocal,
@@ -38,7 +42,9 @@ function context(visualTier: 'full' | 'reduced', burnField?: BurnField): Vegetat
     riverS: () => -850,
     flightLegs: [[mission.ship, mission.lake], [mission.lake, mission.fire]],
     settlementExclusions: [],
-    farmExclusions: [],
+    farmExclusions: roadsideRoads?.length ? [{ center: { x: 1_900, z: -520 }, radius: 1_400 }] : [],
+    roadsideRoads,
+    roadsideExclusions: [],
     visualTier,
     burnField,
   };
@@ -54,6 +60,22 @@ function triangleCount(mesh: THREE.InstancedMesh) {
 }
 
 describe('procedural tropical vegetation', () => {
+  it('disposes every instance batch after removing it from the scene', () => {
+    const scene = new THREE.Scene();
+    const vegetation = createVegetation(scene, campaign, mission, context('full'));
+    const instanceBatches: THREE.InstancedMesh[] = [];
+    scene.traverse(object => {
+      if (object instanceof THREE.InstancedMesh) instanceBatches.push(object);
+    });
+    const disposeSpies = instanceBatches.map(mesh => vi.spyOn(mesh, 'dispose'));
+
+    vegetation.dispose();
+
+    expect(instanceBatches.length).toBeGreaterThan(0);
+    expect(disposeSpies.every(dispose => dispose.mock.calls.length === 1)).toBe(true);
+    expect(instanceBatches.every(mesh => mesh.parent === null)).toBe(true);
+  });
+
   it('classifies persistent burn severity at stable visual thresholds', () => {
     expect(classifyBurnSeverity(0)).toBe('unburned');
     expect(classifyBurnSeverity(.079)).toBe('unburned');
@@ -91,6 +113,47 @@ describe('procedural tropical vegetation', () => {
       const reducedUnderstory = reducedScene.getObjectByName('forest understory') as THREE.InstancedMesh;
       expect(reduced.stats.understory).toBe(full.stats.understory);
       expect(reducedUnderstory.instanceMatrix.array).toEqual(fullUnderstory.instanceMatrix.array);
+    } finally {
+      full.dispose();
+      reduced.dispose();
+    }
+  });
+
+  it('plants stable tree rows on both road shoulders and registers every trunk', () => {
+    const road = {
+      id: 'test-main-road',
+      kind: 'paved' as const,
+      points: [
+        { t: 700, s: -520 },
+        { t: 1_450, s: -520 },
+        { t: 2_300, s: -520 },
+        { t: 3_100, s: -520 },
+      ],
+    };
+    const fullScene = new THREE.Scene();
+    const reducedScene = new THREE.Scene();
+    const full = createVegetation(fullScene, campaign, mission, context('full', undefined, [road]));
+    const reduced = createVegetation(reducedScene, campaign, mission, context('reduced', undefined, [road]));
+
+    try {
+      const roadsideTrees = full.treeColliders.filter(tree => {
+        const sideOffset = tree.z + 520;
+        return tree.x > 700 && tree.x < 3_100 && Math.abs(sideOffset) >= 15 && Math.abs(sideOffset) <= 22;
+      });
+      expect(roadsideTrees.filter(tree => tree.z > -520).length).toBeGreaterThan(20);
+      expect(roadsideTrees.filter(tree => tree.z < -520).length).toBeGreaterThan(20);
+      expect(reduced.treeColliders).toEqual(full.treeColliders);
+      expect(full.treeColliders).toHaveLength(20_000);
+      expect(instanceMeshes(fullScene, 'lowland tree boles').reduce((sum, mesh) => sum + mesh.count, 0))
+        .toBe(full.treeColliders.length);
+      expect(instanceMeshes(reducedScene, 'lowland tree boles').reduce((sum, mesh) => sum + mesh.count, 0))
+        .toBe(reduced.treeColliders.length);
+
+      const minimumRouteClearance = Math.min(...full.treeColliders.map(tree => {
+        const routeX = Math.max(mission.ship.x, Math.min(mission.fire.x, tree.x));
+        return Math.hypot(tree.x - routeX, tree.z) - tree.radius;
+      }));
+      expect(minimumRouteClearance).toBeGreaterThan(60);
     } finally {
       full.dispose();
       reduced.dispose();

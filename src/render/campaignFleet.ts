@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Campaign } from '../types';
+import { campaigns } from '../content';
 import { createAircraft } from './aircraft';
 import { createShip } from './ships';
 import { createWater } from './water';
@@ -8,6 +9,9 @@ import { evaluateTimeOfDay } from './timeOfDay';
 
 const WIDTH = 1200;
 const HEIGHT = 420;
+// One world-to-image scale lets players compare fleet sizes across campaigns.
+const VIEW_WIDTH = Math.max(...campaigns.map(campaign => campaign.shipLength)) * 1.27;
+const AIRCRAFT_X = Math.max(...campaigns.map(campaign => campaign.shipWidth)) / 2 + 15;
 const fleetImages = new Map<Campaign['id'], Promise<string>>();
 
 function disposeScene(scene: THREE.Scene) {
@@ -17,6 +21,7 @@ function disposeScene(scene: THREE.Scene) {
 
   scene.traverse(object => {
     if (!(object instanceof THREE.Mesh)) return;
+    if (object instanceof THREE.InstancedMesh) object.dispose();
     geometries.add(object.geometry);
     for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
       materials.add(material);
@@ -69,9 +74,12 @@ function renderFleet(campaign: Campaign): string {
 
     createShip(scene, campaign, mission);
     const aircraft = createAircraft(campaign);
+    const centerZ = (campaign.id === 'jp_ketapang_2026_09' ? 40 : 35) - campaign.shipLength / 2;
     // The campaign marker is the aft landing area. Keep the aircraft parallel to
     // the ship, just outside its starboard side and above the open aft deck.
-    aircraft.root.position.set(campaign.shipWidth / 2 + 15, 25, 0);
+    // Keep the same camera-relative position as well as distance: perspective
+    // must not make one Chinook larger because its ship has a different beam.
+    aircraft.root.position.set(AIRCRAFT_X, 25, centerZ + 50);
     for (const rotor of aircraft.rotors) {
       const disc = rotor.userData.disc as THREE.Mesh;
       disc.visible = true;
@@ -85,13 +93,11 @@ function renderFleet(campaign: Campaign): string {
     }
     scene.add(aircraft.root);
 
-    const viewWidth = campaign.shipLength * 1.27;
     // A long-lens, near-broadside view reveals the real sheer, bridge tiers and
     // freeboard. The former elevated orthographic view flattened the silhouette
     // against an all-water background and hid the bow's vertical rake.
     const camera = new THREE.PerspectiveCamera(18, WIDTH / HEIGHT, .1, 2200);
-    const viewDistance = viewWidth / (2 * Math.tan(THREE.MathUtils.degToRad(9)) * camera.aspect);
-    const centerZ = (campaign.id === 'jp_ketapang_2026_09' ? 40 : 35) - campaign.shipLength / 2;
+    const viewDistance = VIEW_WIDTH / (2 * Math.tan(THREE.MathUtils.degToRad(9)) * camera.aspect);
     camera.position.set(viewDistance, 7 + viewDistance * .075, centerZ + 6);
     camera.lookAt(0, 7, centerZ);
     camera.updateProjectionMatrix();

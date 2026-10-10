@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { campaigns } from '../content';
 import { createCoastalDetails } from './coastalDetails';
@@ -50,6 +50,11 @@ function generate(campaign: MissionCase['campaign'], mission: MissionCase['missi
 describe('coastal detail generation', () => {
   it.each(missionCases)('$campaign.id / $mission.id stays deterministic within its budgets and clear of flight routes', ({ campaign, mission }) => {
     const first = generate(campaign, mission);
+    const instanceMeshes: THREE.InstancedMesh[] = [];
+    first.scene.traverse(object => {
+      if (object instanceof THREE.InstancedMesh) instanceMeshes.push(object);
+    });
+    const disposeSpies = instanceMeshes.map(mesh => vi.spyOn(mesh, 'dispose'));
     try {
       const { stats, treeColliders, structureColliders } = first.details;
       expect(stats.coastalDrawCalls).toBeLessThanOrEqual(12);
@@ -102,6 +107,9 @@ describe('coastal detail generation', () => {
     } finally {
       first.details.dispose();
     }
+    expect(instanceMeshes.length).toBeGreaterThan(0);
+    expect(disposeSpies.every(dispose => dispose.mock.calls.length === 1)).toBe(true);
+    expect(instanceMeshes.every(mesh => first.scene.getObjectById(mesh.id) === undefined)).toBe(true);
   });
 
   it.each(missionCases)('$campaign.id / $mission.id adds fog-compatible world-anchored distant scenery and skips previews', ({ campaign, mission }) => {

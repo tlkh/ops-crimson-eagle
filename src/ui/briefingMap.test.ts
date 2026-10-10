@@ -67,6 +67,13 @@ describe('briefing map model', () => {
       expect(model.lake.x + model.lake.radius).toBeLessThanOrEqual(BRIEFING_MAP_WIDTH);
       expect(model.lake.y - model.lake.radius).toBeGreaterThanOrEqual(0);
       expect(model.lake.y + model.lake.radius).toBeLessThanOrEqual(BRIEFING_MAP_HEIGHT);
+      expect(model.lakeOutline.length).toBeGreaterThanOrEqual(90);
+      for (const point of model.lakeOutline) {
+        expect(point.x).toBeGreaterThanOrEqual(0);
+        expect(point.x).toBeLessThanOrEqual(BRIEFING_MAP_WIDTH);
+        expect(point.y).toBeGreaterThanOrEqual(0);
+        expect(point.y).toBeLessThanOrEqual(BRIEFING_MAP_HEIGHT);
+      }
 
       for (const rect of model.terrainRects) {
         expect([rect.x, rect.y, rect.width, rect.height].every(Number.isFinite)).toBe(true);
@@ -108,6 +115,7 @@ describe('briefing map model', () => {
       expect(markup).toContain(`briefing-map-${mission.id}-description`);
       expect(markup).toContain(`${mission.id} mission map:`);
       expect(markup).toContain('class="cm-map-route"');
+      expect(markup).toContain('class="cm-map-lake-shore"');
       expect(markup).toContain('class="cm-map-water"');
       expect(markup).toContain('class="cm-map-land"');
       expect(markup).not.toMatch(/NaN|Infinity/);

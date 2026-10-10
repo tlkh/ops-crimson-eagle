@@ -1,5 +1,6 @@
 import type { Campaign, Mission } from '../types';
 import { terrainHeight } from '../sim/collision';
+import { lakeOutlinePoints, lakeRadiusBounds } from '../sim/lakeShape';
 
 export const BRIEFING_MAP_WIDTH = 480;
 export const BRIEFING_MAP_HEIGHT = 600;
@@ -19,6 +20,7 @@ export type BriefingMapModel = {
   ship: BriefingMapPoint;
   shore: BriefingMapPoint | null;
   lake: BriefingMapPoint & { radius: number };
+  lakeOutline: BriefingMapPoint[];
   fire: BriefingMapPoint & { radius: number };
   route: BriefingMapPoint[];
   terrain: BriefingMapTerrain;
@@ -175,10 +177,11 @@ export function buildBriefingMapModel(campaign: Campaign, mission: Mission): Bri
   const inlandX = dx / length;
   const inlandZ = dz / length;
   const basis = { inlandX, inlandZ, lateralX: -inlandZ, lateralZ: inlandX };
+  const lakeOuterRadius = lakeRadiusBounds(campaign.id, mission.lake.radius).max;
   const definitions: { key: BriefingMapLabel['marker']; text: string; world: WorldPoint; worldRadius: number }[] = [
     { key: 'ship', text: 'SHIP', world: mission.ship, worldRadius: 18 },
     ...(mission.shore ? [{ key: 'shore' as const, text: 'SHORE PAD', world: mission.shore, worldRadius: 18 }] : []),
-    { key: 'lake', text: 'LAKE', world: mission.lake, worldRadius: mission.lake.radius },
+    { key: 'lake', text: 'LAKE', world: mission.lake, worldRadius: lakeOuterRadius },
     { key: 'fire', text: 'FIRE', world: mission.fire, worldRadius: mission.fire.radius },
   ];
   const local = definitions.map((item) => ({ ...item, point: localPoint(item.world, mission, basis) }));
@@ -211,6 +214,7 @@ export function buildBriefingMapModel(campaign: Campaign, mission: Mission): Bri
   const ship = projected(mission.ship);
   const shore = mission.shore ? projected(mission.shore) : null;
   const lakePoint = projected(mission.lake);
+  const lakeOutline = lakeOutlinePoints(campaign.id, mission.lake).map(projected);
   const firePoint = projected(mission.fire);
   const radiusScale = scale;
   const route = [
@@ -224,7 +228,7 @@ export function buildBriefingMapModel(campaign: Campaign, mission: Mission): Bri
   const markers: MarkerLayout[] = [
     { key: 'ship', text: 'SHIP', point: ship, radius: 10 },
     ...(shore ? [{ key: 'shore' as const, text: 'SHORE PAD', point: shore, radius: 9 }] : []),
-    { key: 'lake', text: 'LAKE', point: lakePoint, radius: mission.lake.radius * radiusScale },
+    { key: 'lake', text: 'LAKE', point: lakePoint, radius: lakeOuterRadius * radiusScale },
     { key: 'fire', text: 'FIRE', point: firePoint, radius: mission.fire.radius * radiusScale },
   ];
   const terrain = createTerrainGrid(campaign, mission, basis, terrainBounds);
@@ -234,6 +238,7 @@ export function buildBriefingMapModel(campaign: Campaign, mission: Mission): Bri
     ship,
     shore,
     lake: { ...lakePoint, radius: mission.lake.radius * radiusScale },
+    lakeOutline,
     fire: { ...firePoint, radius: mission.fire.radius * radiusScale },
     route,
     terrain,
@@ -271,6 +276,7 @@ export function renderBriefingMap(campaign: Campaign, mission: Mission, terrainI
   const background = terrainImage
     ? `<image class="cm-map-terrain" href="${escapeXml(terrainImage)}" x="0" y="0" width="${BRIEFING_MAP_WIDTH}" height="${BRIEFING_MAP_HEIGHT}" preserveAspectRatio="none"/>`
     : `<rect class="cm-map-water" x="0" y="0" width="${BRIEFING_MAP_WIDTH}" height="${BRIEFING_MAP_HEIGHT}" fill="#356f73"/><path class="cm-map-land" d="${land}" fill="#718365" fill-opacity="0.9"/>`;
+  const lakeOutlinePointsSvg = model.lakeOutline.map(({ x, y }) => `${num(x)},${num(y)}`).join(' ');
   const leaders = model.labels.map(label => {
     const point = model[label.marker];
     if (!point) return '';
@@ -279,5 +285,5 @@ export function renderBriefingMap(campaign: Campaign, mission: Mission, terrainI
     return `<path class="cm-map-leader" d="M${num(point.x)} ${num(point.y)}L${num(endX)} ${num(endY)}"/>`;
   }).join('');
 
-  return `<svg class="cm-map-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${BRIEFING_MAP_WIDTH} ${BRIEFING_MAP_HEIGHT}" width="100%" height="100%" role="img" aria-labelledby="${titleId} ${descriptionId}" preserveAspectRatio="xMidYMid meet"><title id="${titleId}">${missionId} mission map: ${escapeXml(mission.title)}</title><desc id="${descriptionId}">${terrainImage ? 'Top-down render of the actual gameplay terrain' : 'Schematic local gameplay map'} for ${missionId}, showing the ship, ${shoreDescription}freshwater lake refill zone at its authored radius, fictional fire target and planned route. Inland is oriented upward; the drawing uses local gameplay metres.</desc>${background}<polyline class="cm-map-route" points="${points}" fill="none" stroke="#f1e8d1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/><circle class="cm-map-lake-zone" cx="${num(model.lake.x)}" cy="${num(model.lake.y)}" r="${num(model.lake.radius)}" fill="#a8d8cb" fill-opacity="0.035" stroke="#d0e8d7" stroke-opacity="0.88" stroke-width="1.5"/><circle class="cm-map-fire-zone" cx="${num(model.fire.x)}" cy="${num(model.fire.y)}" r="${num(model.fire.radius)}" fill="#e5845d" fill-opacity="0.08" stroke="#f3aa83" stroke-opacity="0.9" stroke-width="1.5"/><g class="cm-map-marker cm-map-marker-ship" aria-hidden="true" fill="#eee5ce" stroke="#263832" stroke-width="2"><circle cx="${num(model.ship.x)}" cy="${num(model.ship.y)}" r="10"/><path d="M${num(model.ship.x - 5)} ${num(model.ship.y)}h10M${num(model.ship.x)} ${num(model.ship.y - 5)}v10"/></g>${model.shore ? `<g class="cm-map-marker cm-map-marker-shore" aria-hidden="true" fill="#f2e8d0" stroke="#263832" stroke-width="2"><rect x="${num(model.shore.x - 6)}" y="${num(model.shore.y - 6)}" width="12" height="12" rx="2"/><path d="M${num(model.shore.x - 3)} ${num(model.shore.y)}h6M${num(model.shore.x)} ${num(model.shore.y - 3)}v6"/></g>` : ''}<g class="cm-map-marker cm-map-marker-lake" aria-hidden="true" fill="#d9eee0" stroke="#275d5b" stroke-width="1.5"><circle cx="${num(model.lake.x)}" cy="${num(model.lake.y)}" r="5"/></g><g class="cm-map-marker cm-map-marker-fire" aria-hidden="true" fill="#ffe4c3" stroke="#9f4939" stroke-width="1.5"><circle cx="${num(model.fire.x)}" cy="${num(model.fire.y)}" r="5"/><path d="M${num(model.fire.x)} ${num(model.fire.y - 3)}v6M${num(model.fire.x - 3)} ${num(model.fire.y)}h6"/></g>${leaders}${model.labels.map(markerLabel).join('')}</svg>`;
+  return `<svg class="cm-map-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${BRIEFING_MAP_WIDTH} ${BRIEFING_MAP_HEIGHT}" width="100%" height="100%" role="img" aria-labelledby="${titleId} ${descriptionId}" preserveAspectRatio="xMidYMid meet"><title id="${titleId}">${missionId} mission map: ${escapeXml(mission.title)}</title><desc id="${descriptionId}">${terrainImage ? 'Top-down render of the actual gameplay terrain' : 'Schematic local gameplay map'} for ${missionId}, showing the ship, ${shoreDescription}irregular freshwater shoreline and circular lake refill zone, fictional fire target and planned route. Inland is oriented upward; the drawing uses local gameplay metres.</desc>${background}<polygon class="cm-map-lake-shore" points="${lakeOutlinePointsSvg}" fill="#a8d8cb" fill-opacity="0.12" stroke="#d0e8d7" stroke-opacity="0.88" stroke-width="1.5"/><polyline class="cm-map-route" points="${points}" fill="none" stroke="#f1e8d1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/><circle class="cm-map-lake-zone" cx="${num(model.lake.x)}" cy="${num(model.lake.y)}" r="${num(model.lake.radius)}" fill="#a8d8cb" fill-opacity="0.035" stroke="#d0e8d7" stroke-opacity="0.88" stroke-width="1.25" stroke-dasharray="4 4"/><circle class="cm-map-fire-zone" cx="${num(model.fire.x)}" cy="${num(model.fire.y)}" r="${num(model.fire.radius)}" fill="#e5845d" fill-opacity="0.08" stroke="#f3aa83" stroke-opacity="0.9" stroke-width="1.5"/><g class="cm-map-marker cm-map-marker-ship" aria-hidden="true" fill="#eee5ce" stroke="#263832" stroke-width="2"><circle cx="${num(model.ship.x)}" cy="${num(model.ship.y)}" r="10"/><path d="M${num(model.ship.x - 5)} ${num(model.ship.y)}h10M${num(model.ship.x)} ${num(model.ship.y - 5)}v10"/></g>${model.shore ? `<g class="cm-map-marker cm-map-marker-shore" aria-hidden="true" fill="#f2e8d0" stroke="#263832" stroke-width="2"><rect x="${num(model.shore.x - 6)}" y="${num(model.shore.y - 6)}" width="12" height="12" rx="2"/><path d="M${num(model.shore.x - 3)} ${num(model.shore.y)}h6M${num(model.shore.x)} ${num(model.shore.y - 3)}v6"/></g>` : ''}<g class="cm-map-marker cm-map-marker-lake" aria-hidden="true" fill="#d9eee0" stroke="#275d5b" stroke-width="1.5"><circle cx="${num(model.lake.x)}" cy="${num(model.lake.y)}" r="5"/></g><g class="cm-map-marker cm-map-marker-fire" aria-hidden="true" fill="#ffe4c3" stroke="#9f4939" stroke-width="1.5"><circle cx="${num(model.fire.x)}" cy="${num(model.fire.y)}" r="5"/><path d="M${num(model.fire.x)} ${num(model.fire.y - 3)}v6M${num(model.fire.x - 3)} ${num(model.fire.y)}h6"/></g>${leaders}${model.labels.map(markerLabel).join('')}</svg>`;
 }

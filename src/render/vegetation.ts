@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import type { Campaign, Mission } from '../types';
+import { sampleRoad, type CampaignRoad } from '../content/geography';
 import type { TreeCollider } from '../sim/collision';
 import { atlasUv, createVegetationAtlases } from './vegetationTextures';
 import type { BurnField } from './burnField';
+import { ExclusionLookup } from './exclusionLookup';
 
 export type VegetationPoint = { x: number; z: number };
 export type VegetationZone = { center: VegetationPoint; radius: number };
@@ -19,6 +21,10 @@ export type VegetationContext = {
   flightLegs: readonly (readonly [VegetationPoint, VegetationPoint])[];
   settlementExclusions: readonly VegetationZone[];
   farmExclusions: readonly VegetationZone[];
+  /** Road centerlines used for roadside rows, kept separate from their vegetation buffers. */
+  roadsideRoads?: readonly CampaignRoad[];
+  /** Settlement and cultivated-land exclusions for trees deliberately placed beside roads. */
+  roadsideExclusions?: readonly VegetationZone[];
   /** Reduced visuals keep every tree but use a leaner close-range canopy mesh. */
   visualTier?: VegetationVisualTier;
   /** Persistent fire history used to tint existing plants without changing placement. */
@@ -433,14 +439,115 @@ function inZones(point: VegetationPoint, zones: readonly VegetationZone[], margi
   return zones.some(zone => distance(point, zone.center) < zone.radius + margin);
 }
 
-function makePlantField(campaign: Campaign, mission: Mission, context: VegetationContext) {
+function makePlantField(campaign: Campaign, mission: Mission, context: VegetationContext, settlementLookup: ExclusionLookup) {
   const seed = campaign.id === 'jp_ketapang_2026_09' ? 62017 : 62135;
   const rng = seeded(seed);
   const plants: Plant[] = [];
   const colliders: TreeCollider[] = [];
+  const roadsideLookup = new ExclusionLookup(
+    [...context.settlementExclusions, ...(context.roadsideExclusions ?? [])].map(zone => ({
+      x: zone.center.x,
+      z: zone.center.z,
+      radius: zone.radius,
+    })),
+  );
   const missionFireZones = campaign.missions.map(item => ({ center: item.fire, radius: item.fire.radius + 46 }));
-  const settlementZones = [...context.settlementExclusions, ...context.farmExclusions];
   const coast = context.coastAt(0);
+  const roadHalfWidth = (kind: CampaignRoad['kind']) => kind === 'paved' ? 5.4 : kind === 'gravel' ? 4.2 : 3.1;
+  const roadPaths = (context.roadsideRoads ?? []).map(road => ({ road, points: sampleRoad(road.points, 8) }));
+  const distanceToRoad = (point: VegetationPoint, line: readonly { t: number; s: number }[]) => {
+    const local = context.local(point);
+    let nearest = Infinity;
+    for (let index = 1; index < line.length; index++) {
+      const a = line[index - 1], b = line[index];
+      const dt = b.t - a.t, ds = b.s - a.s;
+      const lengthSquared = dt * dt + ds * ds;
+      const fraction = lengthSquared === 0 ? 0 : THREE.MathUtils.clamp(
+        ((local.t - a.t) * dt + (local.s - a.s) * ds) / lengthSquared, 0, 1,
+      );
+      nearest = Math.min(nearest, Math.hypot(local.t - a.t - fraction * dt, local.s - a.s - fraction * ds));
+    }
+    return nearest;
+  };
+  const makeTree = (point: VegetationPoint, ground: number, local: { t: number; s: number }, rng: () => number, routeDistance: number): Plant => {
+    const coastDistance = local.t - context.coastAt(local.s);
+    const riverDistance = Math.abs(local.s - context.riverS(local.t));
+    const canopyNoise = Math.sin(local.t * .0046 + 1.1) * Math.cos(local.s * .0039 - .6)
+      + .3 * Math.sin((local.t + local.s) * .0091);
+    const species = chooseSpecies(rng, coastDistance, riverDistance, canopyNoise, local.t, local.s);
+    const shape = shapeFor(species, rng, routeDistance);
+    const yaw = rng() * TAU;
+    const trunkScale = shape.species === 'coastal' ? .85 + rng() * .45 : .68 + rng() * .48;
+    const bark = new THREE.Color().setHSL(.075 + rng() * .025, .16 + rng() * .08, .20 + rng() * .08).convertSRGBToLinear();
+    return {
+      point,
+      ground,
+      height: shape.height,
+      radius: shape.radius,
+      yaw,
+      trunkScale,
+      species: shape.species,
+      bark,
+      leaves: randomLeafColor(rng, shape.species, local.t, local.s),
+      rootScale: shape.species === 'coastal' || shape.species === 'swamp' ? .58 + rng() * .65 : 0,
+      burn: 'unburned',
+      burnAge: 0,
+      burnActivity: 0,
+    };
+  };
+  const addTree = (plant: Plant) => {
+    plants.push(plant);
+    colliders.push({
+      x: plant.point.x,
+      z: plant.point.z,
+      ground: plant.ground,
+      height: plant.height,
+      radius: plant.radius,
+    });
+  };
+
+  // Seed an irregular but recognizable tree line along both shoulders of each
+  // authored road. General forest placement still respects the full road buffer.
+  for (let roadIndex = 0; roadIndex < roadPaths.length; roadIndex++) {
+    const { road } = roadPaths[roadIndex];
+    const samples = sampleRoad(road.points, 48);
+    const rowRandom = seeded(seed ^ Math.imul(roadIndex + 1, 0x9e3779b9));
+    for (let index = 1; index < samples.length - 1; index++) {
+      const previous = samples[index - 1], center = samples[index], next = samples[index + 1];
+      const dt = next.t - previous.t, ds = next.s - previous.s;
+      const length = Math.hypot(dt, ds);
+      if (length < 1) continue;
+      const tangent = { t: dt / length, s: ds / length };
+      const normal = { t: -tangent.s, s: tangent.t };
+      for (const side of [-1, 1]) {
+        const alongJitter = (rowRandom() - .5) * 7;
+        const offset = roadHalfWidth(road.kind) + 11 + rowRandom() * 2.4;
+        const local = {
+          t: center.t + tangent.t * alongJitter + normal.t * side * offset,
+          s: center.s + tangent.s * alongJitter + normal.s * side * offset,
+        };
+        if (local.t < context.coastAt(local.s) + 58 || local.t > 6_400 || Math.abs(local.s) > 4_540) continue;
+        const point = context.fromLocal(local.t, local.s);
+        const ground = context.terrainHeight(point.x, point.z);
+        if (!Number.isFinite(ground) || ground < -4 || context.isLake(point)) continue;
+        if (Math.abs(local.s - context.riverS(local.t)) < 52) continue;
+        if (roadsideLookup.contains(point.x, point.z, 25) || inZones(point, missionFireZones, 0)) continue;
+        if (mission.shore && distance(point, mission.shore) < 900) continue;
+
+        // Keep rows out of intersections and away from flight paths, where
+        // rotor clearance takes priority over roadside continuity.
+        if (roadPaths.some((other, otherIndex) => otherIndex !== roadIndex
+          && distanceToRoad(point, other.points) < roadHalfWidth(other.road.kind) + 10)) continue;
+        let routeDistance = Infinity;
+        for (const leg of context.flightLegs) routeDistance = Math.min(routeDistance, distanceToLeg(point, leg));
+        const plant = makeTree(point, ground, local, rowRandom, routeDistance);
+        const routeClearance = plant.species === 'emergent' ? 170 + plant.radius : 61 + plant.radius;
+        if (routeDistance < routeClearance) continue;
+        addTree(plant);
+      }
+    }
+  }
+
   let tries = 0;
   const maxTries = PLANT_TARGET * 32;
 
@@ -464,10 +571,9 @@ function makePlantField(campaign: Campaign, mission: Mission, context: Vegetatio
     const ground = context.terrainHeight(point.x, point.z);
     if (ground < -4) continue;
     const local = context.local(point);
-    const coastDistance = local.t - context.coastAt(local.s);
     const riverDistance = Math.abs(local.s - context.riverS(local.t));
     if (riverDistance < 52) continue;
-    if (inZones(point, settlementZones, 25) || inZones(point, missionFireZones, 0)) continue;
+    if (settlementLookup.contains(point.x, point.z, 25) || inZones(point, missionFireZones, 0)) continue;
     if (mission.shore && distance(point, mission.shore) < 900) continue;
 
     let routeDistance = Infinity;
@@ -476,28 +582,16 @@ function makePlantField(campaign: Campaign, mission: Mission, context: Vegetatio
     // Multi-scale stand structure gives irregular dense pockets instead of a uniform grid.
     const standNoise = Math.sin(t * .0018 + .45) * Math.cos(s * .00155 - .8)
       + .36 * Math.sin((t + s) * .0038) + .17 * Math.cos((t - s) * .0062);
-    const canopyNoise = Math.sin(t * .0046 + 1.1) * Math.cos(s * .0039 - .6)
-      + .3 * Math.sin((t + s) * .0091);
     const patchProbability = Math.max(.2, Math.min(.92, .56 + standNoise * .24));
     if (rng() > patchProbability) continue;
 
-    const species = chooseSpecies(rng, coastDistance, riverDistance, canopyNoise, t, s);
-    const shape = shapeFor(species, rng, routeDistance);
+    // Use the same final tree construction as roadside rows; this shared path
+    // keeps all species, burn tinting, visuals, and colliders consistent.
+    const plant = makeTree(point, ground, local, rng, routeDistance);
     // Leave room for rotor radius and collision padding around marked flight legs.
-    const routeClearance = species === 'emergent' ? 170 + shape.radius : 61 + shape.radius;
+    const routeClearance = plant.species === 'emergent' ? 170 + plant.radius : 61 + plant.radius;
     if (routeDistance < routeClearance) continue;
-    const yaw = rng() * TAU;
-    const trunkScale = species === 'coastal' ? .85 + rng() * .45 : .68 + rng() * .48;
-    const bark = new THREE.Color().setHSL(.075 + rng() * .025, .16 + rng() * .08, .20 + rng() * .08).convertSRGBToLinear();
-    const leaves = randomLeafColor(rng, shape.species, t, s);
-    const plant: Plant = {
-      point, ground, height: shape.height, radius: shape.radius, yaw, trunkScale,
-      species: shape.species, bark, leaves,
-      rootScale: shape.species === 'coastal' || shape.species === 'swamp' ? .58 + rng() * .65 : 0,
-      burn: 'unburned', burnAge: 0, burnActivity: 0,
-    };
-    plants.push(plant);
-    colliders.push({ x: point.x, z: point.z, ground, height: shape.height, radius: shape.radius });
+    addTree(plant);
   }
 
   return { plants, colliders };
@@ -510,7 +604,14 @@ export function createVegetation(
   mission: Mission,
   context: VegetationContext,
 ): VegetationResult {
-  const { plants, colliders } = makePlantField(campaign, mission, context);
+  const settlementLookup = new ExclusionLookup(
+    [...context.settlementExclusions, ...context.farmExclusions].map(zone => ({
+      x: zone.center.x,
+      z: zone.center.z,
+      radius: zone.radius,
+    })),
+  );
+  const { plants, colliders } = makePlantField(campaign, mission, context, settlementLookup);
   applyBurnField(plants, context.burnField);
   const visualTier = context.visualTier ?? 'full';
   const foliageAtlas = createVegetationAtlases();
@@ -671,7 +772,6 @@ export function createVegetation(
   reeds.receiveShadow = false;
 
   const rng = seeded((campaign.id === 'jp_ketapang_2026_09' ? 62017 : 62135) ^ 0x9e3779b9);
-  const settlementZones = [...context.settlementExclusions, ...context.farmExclusions];
   const missionFireZones = campaign.missions.map(item => ({ center: item.fire, radius: item.fire.radius + 46 }));
   let understoryCount = 0;
   let understoryTries = 0;
@@ -680,7 +780,7 @@ export function createVegetation(
     const s = (rng() - .5) * 5_600;
     const point = context.fromLocal(t, s);
     if (context.isLake(point) || context.terrainHeight(point.x, point.z) < -4) continue;
-    if (inZones(point, settlementZones, 20) || inZones(point, missionFireZones, 0)) continue;
+    if (settlementLookup.contains(point.x, point.z, 20) || inZones(point, missionFireZones, 0)) continue;
     if (mission.shore && distance(point, mission.shore) < 900) continue;
     if (Math.abs(s - context.riverS(t)) < 58) continue;
     let routeDistance = Infinity;
@@ -784,9 +884,17 @@ export function createVegetation(
       for (const cell of cellBatches) {
         scene.remove(cell.trunk, cell.crown);
         if (cell.fronds) scene.remove(cell.fronds);
+        cell.trunk.dispose();
+        cell.crown.dispose();
+        cell.fronds?.dispose();
       }
-      if (deadBranches) scene.remove(deadBranches);
+      if (deadBranches) {
+        scene.remove(deadBranches);
+        deadBranches.dispose();
+      }
       scene.remove(understory, reeds);
+      understory.dispose();
+      reeds.dispose();
       trunkGeometry.dispose();
       deadBranchGeometry.dispose();
       frondGeometry.dispose();

@@ -72,7 +72,7 @@ function validateMission(campaign: Campaign, mission: Mission, index: number, is
       const shipToShore = distance(mission.ship, mission.shore);
       const shoreToLake = distance(mission.shore, mission.lake);
       if (shipToShore < 350 || shipToShore > 500) issues.push(`${path}: shore point should be 350–500 m from the ship in local gameplay space.`);
-      if (shoreToLake < 700 || shoreToLake > 900) issues.push(`${path}: lake should be 700–900 m beyond the shore point in local gameplay space.`);
+      if (shoreToLake < 1000 || shoreToLake > 1100) issues.push(`${path}: lake should be 1,000–1,100 m beyond the shore point in local gameplay space.`);
     }
   }
 

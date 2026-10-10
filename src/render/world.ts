@@ -9,13 +9,15 @@ import { createCoastalSampler } from './coastalSampling';
 import { createGroundSurface } from './groundSurface';
 import { createLandUse } from './landUse';
 import { createVegetation } from './vegetation';
+import { ExclusionLookup } from './exclusionLookup';
 import { createDistantScenery } from './distantScenery';
+import { getCampaignGeography } from '../content/geography';
 import type { RenderQualityProfile } from './quality';
 import type { TextureAssets } from './textureAssets';
 import { createBurnField, isBurnProtectedAirport } from './burnField';
+import { isWithinLakeOutline, lakeOutlinePoints, lakeRadiusAtAngle } from '../sim/lakeShape';
 
 type V = { x: number; z: number };
-const TAU = Math.PI * 2;
 const distance = (a: V, b: V) => Math.hypot(a.x - b.x, a.z - b.z);
 const seeded = (seed: number) => { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); };
 const material = (color: THREE.ColorRepresentation, roughness = .94) => new THREE.MeshStandardMaterial({ color, roughness });
@@ -65,7 +67,8 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
       const p = fromLocal(t, s), height = terrainHeight(p.x, p.z);
       positions.push(p.x, height, p.z); heights.push(height); uvs.push(row / rows, col / cols);
       const shoreDistance = t - coastAt(s);
-      const lakeDistance = distance(p, mission.lake) - mission.lake.radius;
+      const lakeAngle = Math.atan2(-(p.z - mission.lake.z), p.x - mission.lake.x);
+      const lakeDistance = distance(p, mission.lake) - lakeRadiusAtAngle(campaign.id, mission.lake.radius, lakeAngle);
       const riverDistance = Math.abs(s - riverS(t));
       const shoreSand = 1 - smoothstep(18, 170, shoreDistance);
       const lakeSand = (1 - smoothstep(0, 62, Math.abs(lakeDistance))) * .6;
@@ -88,11 +91,9 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   const terrain = new THREE.BufferGeometry(); terrain.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); terrain.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3)); terrain.setAttribute('groundBiome', new THREE.Float32BufferAttribute(biomeWeights, 3)); terrain.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2)); terrain.setIndex(indices); terrain.computeVertexNormals();
 
   // Retain the entire authored refill disc; extend irregular bays away from the operational fire area.
-  const r = mission.lake.radius;
-  const lakeRadius = (a: number) => r * (1.02 + .025 * (1 + Math.sin(a * 5 + .8)) + .04 * Math.pow(Math.max(0, Math.cos(a - Math.PI)), 4));
   const lakeBoundary = (scale: number) => {
-    const pts: THREE.Vector2[] = [];
-    for (let i = 0; i < 96; i++) { const a = i / 96 * TAU, radius = lakeRadius(a) * scale; pts.push(new THREE.Vector2(Math.cos(a) * radius, Math.sin(a) * radius)); }
+    const pts = lakeOutlinePoints(campaign.id, mission.lake, 96, scale)
+      .map(point => new THREE.Vector2(point.x - mission.lake.x, mission.lake.z - point.z));
     return new THREE.ShapeGeometry(new THREE.Shape(pts));
   };
   const shore = new THREE.Mesh(lakeBoundary(1.07), material('#85815a'));
@@ -112,8 +113,7 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   ribbon(jp ? 68 : 48, -.12, material('#7e7659')); ribbon(jp ? 56 : 38, .015, water.riverMaterial);
 
   const isLake = (p: V) => {
-    const x = p.x - mission.lake.x, z = -(p.z - mission.lake.z);
-    return Math.hypot(x, z) < lakeRadius(Math.atan2(z, x)) * 1.09;
+    return isWithinLakeOutline(campaign.id, mission.lake, p, mission.lake.radius * .09);
   };
   // Land uses are placed before woodland so orchards, lanes and farmyards
   // remain visible. Every solid object feeds the shared collision registry.
@@ -127,16 +127,18 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     river: { centerS: riverS, halfWidth: jp ? 68 : 48 },
     shore: mission.shore,
   });
+  const burnExclusions = new ExclusionLookup(landUse.burnExclusionZones);
   // One immutable footprint aligns the terrain, damaged trees and active edge.
-  // Existing protected land uses and water remain breaks in the authored history.
+  // Water, support facilities, settlements and crops stay protected; roads remain burnable.
   const burnField = createBurnField(mission, { eligible: (x, z) => {
     const point = { x, z };
     const { t, s } = local(point);
     if (t < coastAt(s) + 12 || isLake(point)) return false;
     if (Math.abs(s - riverS(t)) < (jp ? 68 : 48) + 12) return false;
     if (isBurnProtectedAirport(mission, x, z)) return false;
-    return !landUse.exclusionZones.some(zone => Math.hypot(x - zone.x, z - zone.z) < zone.radius + 8);
+    return !burnExclusions.contains(x, z, 8);
   } });
+  landUse.applyBurnField(burnField);
   const groundSurface = createGroundSurface(options.textureAssets, burnField);
   const land = new THREE.Mesh(terrain, groundSurface.material); land.receiveShadow = true; scene.add(land);
   const vegetation = createVegetation(scene, campaign, mission, {
@@ -149,6 +151,8 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     flightLegs,
     settlementExclusions: [],
     farmExclusions: landUse.exclusionZones.map(zone => ({ center: { x: zone.x, z: zone.z }, radius: zone.radius })),
+    roadsideRoads: getCampaignGeography(campaign).roads,
+    roadsideExclusions: landUse.burnExclusionZones.map(zone => ({ center: { x: zone.x, z: zone.z }, radius: zone.radius })),
     burnField,
     visualTier: options.preview || window.matchMedia('(max-width: 768px), (pointer: coarse)').matches ? 'reduced' : 'full',
   });

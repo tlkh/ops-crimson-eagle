@@ -399,6 +399,7 @@ export function createScene(container: HTMLElement, options: CreateSceneOptions 
     const geometries = new Set<THREE.BufferGeometry>();
     root.traverse(obj => {
       const mesh = obj as THREE.Mesh;
+      if (mesh instanceof THREE.InstancedMesh) mesh.dispose();
       if (mesh.geometry) geometries.add(mesh.geometry);
       const mat = mesh.material;
       const disposeMaterial = (material: THREE.Material) => {
@@ -466,7 +467,7 @@ export function createScene(container: HTMLElement, options: CreateSceneOptions 
         createShip(scene, campaign, mission);
         vehicle = createAircraft(campaign);
         aircraft.add(vehicle.root);
-        nightLighting = createNightLighting(scene, aircraft, campaign, mission, world.coastalLightingAnchor);
+        nightLighting = createNightLighting(scene, aircraft, campaign, mission, vehicle.lightMounts, world.coastalLightingAnchor);
         proximityParticles = createProximityParticles(scene, campaign, mission);
         bucketRig = createBucketRig(scene);
         groundCrew = createGroundCrew(scene, campaign, mission);

@@ -1,5 +1,6 @@
 import type { Campaign, Mission, SimState, Vec3 } from '../types';
 import { renderedTerrainHeight } from './collision';
+import { isWithinLakeOutline } from './lakeShape';
 
 /** `state.bucket` is the center of the open rim, in world coordinates. */
 export const BUCKET_BODY_HEIGHT_M = 1.48;
@@ -67,7 +68,7 @@ export function bucketSurfaceHeight(campaign: Campaign, mission: Mission, x: num
     localZ >= stern - campaign.shipLength && localZ <= stern) return -2.525;
   // ships.ts builds the deck at -2.55 plus its .025 m top skin. Aircraft
   // origin zero is its landed pose, not the actual surface under the bucket.
-  if (Math.hypot(x - mission.lake.x, z - mission.lake.z) <= mission.lake.radius) return LAKE_SURFACE_M;
+  if (isWithinLakeOutline(campaign.id, mission.lake, { x, z })) return LAKE_SURFACE_M;
   if (mission.shore) {
     // Match the rotated handling pad, apron, runway and taxiways in world.ts.
     const routeX = mission.shore.x - mission.ship.x, routeZ = mission.shore.z - mission.ship.z;
@@ -87,7 +88,7 @@ export function bucketSurfaceHeight(campaign: Campaign, mission: Mission, x: num
 
 /** Lowest plausible rim center, accounting for the bucket body and lake flotation. */
 export function bucketMinimumRimHeight(campaign: Campaign, mission: Mission, x: number, z: number): number {
-  const lake = Math.hypot(x - mission.lake.x, z - mission.lake.z) <= mission.lake.radius;
+  const lake = isWithinLakeOutline(campaign.id, mission.lake, { x, z });
   if (lake) return BUCKET_FLOAT_RIM_M;
   // Sample the footprint so a slope cannot poke through the soft body.
   let surface = -Infinity;

@@ -8,6 +8,7 @@ import { MissionRadioDirector } from './missionRadio';
 import type { MusicTrackId } from './music';
 import type { Campaign, CampaignId, FlightCommand, Mission, SimState } from './types';
 import { WORLD_REVISION } from './worldRevision';
+import { createKeyboardResponse } from './keyboardResponse';
 import './style.css';
 import './ui/menu.css';
 import './ui/flightRefinement.css';
@@ -19,6 +20,8 @@ if (contentErrors.length) throw new Error(`Scenario data invalid: ${contentError
 
 const emptyCommand = (): FlightCommand => ({ yaw: 0, climb: 0, cyclicX: 0, cyclicY: 0, drop: false, fetch: false, faceObjective: false, returnHome: false, action: false });
 let command = emptyCommand();
+const keys = new Set<string>();
+const keyboardResponse = createKeyboardResponse();
 let state: SimState | null = null;
 let campaign: Campaign | null = null;
 let mission: Mission | null = null;
@@ -72,6 +75,8 @@ function queueSave() {
 
 function clearInput() {
   command = emptyCommand();
+  keys.clear();
+  keyboardResponse.reset();
 }
 
 async function selectMission(campaignId: CampaignId, missionId: string) {
@@ -175,7 +180,6 @@ async function act(name: string) {
   if (name === 'return') command.returnHome = true;
 }
 
-const keys = new Set<string>();
 window.addEventListener('keydown', event => {
   const key = event.key.toLowerCase();
   if (!state || state.phase === 'debrief' || state.phase === 'failed') return;
@@ -199,16 +203,27 @@ window.addEventListener('keydown', event => {
   if (key === 'r') void act('return');
   if (key === 'm') void act('map');
 });
-window.addEventListener('keyup', event => keys.delete(event.key.toLowerCase()));
-window.addEventListener('blur', () => { keys.clear(); clearInput(); });
+window.addEventListener('keyup', event => {
+  const key = event.key.toLowerCase();
+  keys.delete(key);
+  keyboardResponse.releaseKey(key);
+});
+window.addEventListener('blur', clearInput);
+document.addEventListener('focusin', event => {
+  if (event.target instanceof Element && event.target.closest('button, input, select, textarea, [role="group"]')) {
+    keys.clear();
+    keyboardResponse.reset();
+  }
+});
 
 function keyboardCommand(): FlightCommand {
+  const keyboard = keyboardResponse.sample(keys, 1 / 60);
   return {
     ...command,
-    yaw: Math.max(-1, Math.min(1, command.yaw + Number(keys.has('a')) - Number(keys.has('d')))),
-    climb: Math.max(-1, Math.min(1, command.climb + Number(keys.has('w')) - Number(keys.has('s')))),
-    cyclicX: Math.max(-1, Math.min(1, command.cyclicX + Number(keys.has('arrowright')) - Number(keys.has('arrowleft')))),
-    cyclicY: Math.max(-1, Math.min(1, command.cyclicY + Number(keys.has('arrowup')) - Number(keys.has('arrowdown')))),
+    yaw: Math.max(-1, Math.min(1, command.yaw + keyboard.yaw)),
+    climb: Math.max(-1, Math.min(1, command.climb + keyboard.climb)),
+    cyclicX: Math.max(-1, Math.min(1, command.cyclicX + keyboard.cyclicX)),
+    cyclicY: Math.max(-1, Math.min(1, command.cyclicY + keyboard.cyclicY)),
   };
 }
 

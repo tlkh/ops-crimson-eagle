@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import type { Campaign, Mission, SimState } from '../types';
 import { evaluateTimeOfDay } from './timeOfDay';
+import { lakeShapeProfile } from '../sim/lakeShape';
 
 export type WaterQuality = {
   reflectionSize: 256 | 512;
@@ -42,6 +43,9 @@ const fragmentShader = /* glsl */`
   uniform vec4 ship;
   uniform float shipLength;
   uniform vec3 lake;
+  uniform float lakeShapeBase;
+  uniform vec4 lakeShapeHarmonicsA;
+  uniform vec4 lakeShapeHarmonicsB;
   uniform vec4 coast;
   uniform float coastStart;
   uniform vec3 washA;
@@ -78,6 +82,11 @@ const fragmentShader = /* glsl */`
     float ripple = sin(radius*2.2-time*13.0 + noise(p*.35)*1.6);
     slope = d/max(radius,.1) * ripple * outer * source.z * .22;
     return ring * source.z * (.35+.65*noise(p*1.5-time*.9));
+  }
+  float lakeRadiusFactor(float angle) {
+    vec4 first = vec4(cos(angle),sin(angle),cos(2.0*angle),sin(2.0*angle));
+    vec4 second = vec4(cos(3.0*angle),sin(3.0*angle),cos(4.0*angle),sin(4.0*angle));
+    return max(1.0,lakeShapeBase+dot(lakeShapeHarmonicsA,first)+dot(lakeShapeHarmonicsB,second));
   }
   void main() {
     vec2 p = waterPosition.xz;
@@ -132,7 +141,7 @@ const fragmentShader = /* glsl */`
     // Pale shallow margins follow the same irregular outline as the lake mesh.
     vec2 lp = p-lake.xy;
     float angle = atan(-lp.y,lp.x);
-    float lakeRadius = lake.z*(1.02+.025*(1.0+sin(angle*5.0+.8))+.04*pow(max(0.0,cos(angle-PI)),4.0));
+    float lakeRadius = lake.z*lakeRadiusFactor(angle);
     float lakeEdge = lakeRadius-length(lp);
     float margin = exp(-max(0.0,lakeEdge)*.13)*step(.5,kind)*(1.0-step(1.5,kind));
     float along = dot(p-coast.xy,coast.zw);
@@ -180,6 +189,7 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
     reflections: options.reflections ?? true,
   };
   const jp = campaign.id === 'jp_ketapang_2026_09';
+  const lakeShape = lakeShapeProfile(campaign.id);
   const target = mission.shore ?? mission.lake;
   const route = new THREE.Vector2(target.x-mission.ship.x,target.z-mission.ship.z);
   const routeLength = route.length(); route.normalize();
@@ -191,6 +201,9 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
     ship: { value: new THREE.Vector4(mission.ship.x,mission.ship.z,campaign.shipWidth,jp?40:35) },
     shipLength: { value: campaign.shipLength },
     lake: { value: new THREE.Vector3(mission.lake.x,mission.lake.z,mission.lake.radius) },
+    lakeShapeBase: { value: lakeShape.base },
+    lakeShapeHarmonicsA: { value: new THREE.Vector4(...lakeShape.harmonics[0], ...lakeShape.harmonics[1]) },
+    lakeShapeHarmonicsB: { value: new THREE.Vector4(...lakeShape.harmonics[2], ...lakeShape.harmonics[3]) },
     coast: { value: new THREE.Vector4(mission.ship.x,mission.ship.z,route.x,route.y) },
     coastStart: { value: routeLength*.42 },
     washA: { value: new THREE.Vector3() }, washB: { value: new THREE.Vector3() },

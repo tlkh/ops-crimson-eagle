@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { campaigns } from '../content';
 import { createSim } from './index';
-import { BUCKET_BODY_HEIGHT_M, bucketCrossesShipSide, bucketReadyForDeckRecovery, isBucketFootprintOverDeck, SHIP_DECK_SURFACE_M } from './bucket';
+import { BUCKET_BODY_HEIGHT_M, BUCKET_FLOAT_RIM_M, bucketCrossesShipSide, bucketMinimumRimHeight, bucketReadyForDeckRecovery, bucketSurfaceHeight, isBucketFootprintOverDeck, isBucketTouchingLake, LAKE_SURFACE_M, SHIP_DECK_SURFACE_M } from './bucket';
 import { shipLandingPoint } from './shipLanding';
+import { lakeRadiusAtAngle } from './lakeShape';
 
 describe('bucket deck recovery readiness', () => {
   it('requires the whole attached bucket to be over the deck and clear of its surface', () => {
@@ -35,6 +36,22 @@ describe('bucket deck recovery readiness', () => {
     state.bucketAttached = false;
     expect(bucketReadyForDeckRecovery(state, campaign, mission)).toBe(true);
   });
+});
+
+it('keeps the irregular shoreline wet while reserving the central circular refill zone', () => {
+  for (const campaign of campaigns) {
+    const mission = campaign.missions[0];
+    const angle = Array.from({ length: 360 }, (_, index) => index * Math.PI / 180)
+      .find(candidate => lakeRadiusAtAngle(campaign.id, mission.lake.radius, candidate) > mission.lake.radius + 5)!;
+    const radius = mission.lake.radius + 2;
+    const point = {
+      x: mission.lake.x + Math.cos(angle) * radius,
+      z: mission.lake.z - Math.sin(angle) * radius,
+    };
+    expect(bucketSurfaceHeight(campaign, mission, point.x, point.z)).toBe(LAKE_SURFACE_M);
+    expect(bucketMinimumRimHeight(campaign, mission, point.x, point.z)).toBe(BUCKET_FLOAT_RIM_M);
+    expect(isBucketTouchingLake({ ...point, y: BUCKET_BODY_HEIGHT_M + LAKE_SURFACE_M }, mission)).toBe(false);
+  }
 });
 
 

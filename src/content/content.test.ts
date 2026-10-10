@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { campaigns, getCampaign, getMission, validateContent } from './index';
 import { assetProvenance, scenarioPackages, sourceRegister } from './provenance';
+import { lakeRadiusBounds } from '../sim/lakeShape';
 
 describe('campaign content', () => {
   it('validates the two complete compact campaign packages', () => {
@@ -27,14 +28,14 @@ describe('campaign content', () => {
     expect(Math.hypot(singapore.missions[0].lake.x, singapore.missions[0].lake.z)).toBeLessThanOrEqual(1600);
     const japan = campaigns[1].missions[0];
     expect(Math.hypot(japan.shore!.x, japan.shore!.z)).toBeGreaterThanOrEqual(350);
-    expect(Math.hypot(japan.lake.x - japan.shore!.x, japan.lake.z - japan.shore!.z)).toBeGreaterThanOrEqual(700);
+    expect(Math.hypot(japan.lake.x - japan.shore!.x, japan.lake.z - japan.shore!.z)).toBeGreaterThanOrEqual(1000);
+    expect(Math.hypot(japan.lake.x - japan.shore!.x, japan.lake.z - japan.shore!.z)).toBeLessThanOrEqual(1100);
   });
 
   it('keeps every fire patch clear of the freshwater shore', () => {
     for (const campaign of campaigns) for (const mission of campaign.missions) {
       const separation = Math.hypot(mission.fire.x - mission.lake.x, mission.fire.z - mission.lake.z);
-      // The visible lake reaches at most 1.11 times the refill radius.
-      expect(separation).toBeGreaterThan(mission.lake.radius * 1.11 + mission.fire.radius + 20);
+      expect(separation).toBeGreaterThan(lakeRadiusBounds(campaign.id, mission.lake.radius).max + mission.fire.radius + 20);
     }
   });
 

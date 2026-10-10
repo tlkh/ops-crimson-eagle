@@ -30,6 +30,7 @@ Use semantic names: `[MODEL_NAME]-[TASK_TITLE]-[OPTIONAL_ID]`, using underscores
 | `src/main.ts` | Application lifecycle, input aggregation, fixed-step loop, scene/UI coordination, audio, serialized saves |
 | `src/types.ts`, `src/sim/types.ts` | Shared content, commands, and simulation state |
 | `src/content/index.ts` | Campaign and mission definitions |
+| `src/content/geography.ts` | Fixed campaign settlement anchors, sector access points, and connected road network |
 | `src/content/provenance.ts`, `validate.ts` | Scenario evidence and startup content validation |
 | `src/sim/index.ts` | Headless gameplay: flight, phases, fuel, objective actions, bucket, water, fire, outcomes |
 | `src/sim/bucket.ts` | Shared bucket geometry, surface heights, and water-contact helpers |
@@ -63,7 +64,7 @@ Keep gameplay authoritative in the simulation. Render code consumes state; it mu
 - The rope is a one-sided length constraint: gravity and momentum move the bucket, tension limits its distance when taut, and it can slacken when resting. Avoid snapping the bucket to a permanently vertical offset.
 - Damp taut-sling swing relative to the moving hook, preserving inward radial velocity so the rope can slacken. World-space horizontal drag creates persistent trailing during cruise.
 - Ground clearance samples the bucket footprint against the applicable terrain, deck, apron, or pad. Maintain agreement between visible surfaces and simulation heights so neither bucket nor aircraft clips through them.
-- Water contact uses the bucket body bottom against the lake surface within its circular boundary. Filling also requires an attached bucket, an explicit fetching action, and sufficiently low horizontal bucket speed; load remains limited by maximum gross mass.
+- Water contact follows the irregular visible lake shoreline. Filling also requires an attached bucket, an explicit fetching action, contact inside the central circular refill zone, and sufficiently low horizontal bucket speed; load remains limited by maximum gross mass.
 - Released water travels as simulation packets and affects fire on impact. Keep the rendered stream, capacity bar, water mass, and fire response synchronized with that state.
 - After required drops, keep guidance on fire observation while released water is still in flight and while the fire can be secured (surface heat ≤30 for peat, ≤8 otherwise). Keep radio and HUD guidance aligned with these shared thresholds; once the objective is secured, advance to recovery without another lake trip.
 - Singapore deck recovery requires the full bucket footprint over the deck, the bucket clear of deck height, and the aircraft within 5 m of the marked landing point at low horizontal speed. The player carries the load over the deck and descends vertically. Sweep bucket motion against the hull before applying ground-height correction so a sea-level load cannot be dragged through the ship side. Japan retains its campaign-specific recovery flow.
@@ -75,11 +76,13 @@ Keep gameplay authoritative in the simulation. Render code consumes state; it mu
 - Context actions appear only near their respective zones. A bounded final alignment assist may position the aircraft for that action; do not extend it into automatic travel between objectives.
 - The left joystick uses **yaw = -pointer X** and collective/climb = pointer Y after screen-Y normalization. Its knob follows the pointer visually. Keyboard A/D turn left/right; preserve the same direction for focused joystick keyboard controls.
 - `src/ui/stickResponse.ts` applies a radial deadzone and gentle response curve to virtual sticks, with separate yaw/cyclic/collective limits. Keep visual knob travel direct and global flight keyboard inputs independent of those virtual-stick limits.
+- `src/keyboardResponse.ts` independently ramps global flight keys from a gentle initial input to keyboard-specific limits using simulation steps. Release, reversal, opposing keys, and input resets clear the relevant ramp; do not apply keyboard shaping to touch input or simulation/test-driver commands.
 - Reset active inputs on pointer release/cancel/lost capture, pause, blur, visibility changes, and orientation changes. Global shortcuts must not override focused UI controls.
 - Unsafe contact with terrain, trees, ships, structures, or water causes an explosion and mission failure. Controlled landings on designated deck/shore areas are explicit exceptions. Fix geometry/contact math rather than disabling collision to hide clipping.
 - Rendered terrain and collision use the same triangulated height grid. Trees and structures register colliders from their actual generated placement; keep these aligned when changing models or world generation. Collision caches depend on the `Mission` object identity.
 - `TERRAIN_GRID` in `src/sim/collision.ts` defines the visible and collision terrain dimensions. Keep its row/column layout synchronized with `src/render/world.ts`, and preserve triangle interpolation and Float32 height agreement. Hills and land use stay clear of authored routes, refilling water, fire sectors, landing sites, and drainage water.
 - Procedural vegetation and rural land use use stable campaign seeds so scenery does not rearrange between sorties. Keep route/objective/settlement exclusions aligned with generated colliders. Reduced visual tiers must preserve visible trunks and their collision data; do not hide obstacles while retaining invisible colliders.
+- Campaign roads and settlement anchors come from `src/content/geography.ts`; preserve shared junctions and campaign-wide placement when adding sector assets. See [campaign geography](docs/campaign-geography.md). Road exclusions must remain continuous without introducing full-array scans per vegetation or burn-field sample.
 
 ## Rendering and UI conventions
 

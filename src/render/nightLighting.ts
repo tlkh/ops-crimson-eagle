@@ -1,6 +1,7 @@
 import { shipLandingPoint } from '../sim/shipLanding';
 import * as THREE from 'three';
 import type { Campaign, Mission, SimState } from '../types';
+import { updateAircraftLightEmission, type AircraftLightMounts } from './aircraftLighting';
 
 const DECK_Y = -2.55;
 
@@ -12,8 +13,6 @@ type EmissiveFixtures = {
   white: THREE.MeshStandardMaterial;
   amber: THREE.MeshStandardMaterial;
   warm: THREE.MeshStandardMaterial;
-  beacon: THREE.MeshStandardMaterial;
-  landing: THREE.MeshStandardMaterial;
   windows: THREE.MeshStandardMaterial;
 };
 
@@ -55,6 +54,7 @@ export function createNightLighting(
   aircraftAnchor: THREE.Object3D,
   campaign: Campaign,
   mission: Mission,
+  aircraftLights: AircraftLightMounts,
   coastalAnchor?: { x: number; y: number; z: number },
 ): {
   update(state: SimState, nightStrength: number, sunIntensity: number): void;
@@ -73,8 +73,6 @@ export function createNightLighting(
     white: emissiveMaterial('#fff1d3'),
     amber: emissiveMaterial('#ffd27a'),
     warm: emissiveMaterial('#ffb85b'),
-    beacon: emissiveMaterial('#ff3028'),
-    landing: emissiveMaterial('#fff6d8'),
     windows: emissiveMaterial('#ffc875'),
   };
   const sphereGeometry = new THREE.SphereGeometry(1, 10, 8);
@@ -99,6 +97,7 @@ export function createNightLighting(
   );
 
   const landingSpot = new THREE.SpotLight('#fff1d2', 0, 180, 0.52, 0.72, 2);
+  landingSpot.name = 'aircraft-landing-illumination';
   landingSpot.position.set(0, -0.42, -7.05);
   landingSpot.target.position.set(0, -12, -16);
   landingSpot.castShadow = false;
@@ -109,15 +108,6 @@ export function createNightLighting(
   landingSpot.shadow.normalBias = 0.035;
   aircraftAnchor.add(landingSpot, landingSpot.target);
   ownedObjects.push(landingSpot, landingSpot.target);
-
-  const aircraftLights = new THREE.Group();
-  aircraftAnchor.add(aircraftLights);
-  ownedObjects.push(aircraftLights);
-  addLens(aircraftLights, fixtures.red, -2.47, -0.04, 2.35, 0.11);
-  addLens(aircraftLights, fixtures.green, 2.47, -0.04, 2.35, 0.11);
-  addLens(aircraftLights, fixtures.beacon, 0, 3.17, 6.35, 0.13);
-  addLens(aircraftLights, fixtures.white, 0, 0.16, 8.12, 0.11);
-  addLens(aircraftLights, fixtures.landing, 0, -0.42, -7.24, 0.16);
 
   const shipGroup = makeLightGroup(mission.ship);
   scene.add(shipGroup);
@@ -232,27 +222,42 @@ export function createNightLighting(
   scene.add(fireA, fireB);
   ownedObjects.push(fireA, fireB);
 
-  const updateEmissives = (night: number, time: number) => {
+  const updateEmissives = (night: number) => {
     fixtures.red.emissiveIntensity = night * 2.25;
     fixtures.green.emissiveIntensity = night * 2.25;
     fixtures.white.emissiveIntensity = night * 2.15;
     fixtures.amber.emissiveIntensity = night * 1.8;
     fixtures.warm.emissiveIntensity = night * 2.0;
-    fixtures.landing.emissiveIntensity = night * 3.2;
     fixtures.windows.emissiveIntensity = night * 2.25;
-    const pulse = 0.12 + 0.88 * Math.pow(Math.max(0, Math.sin(time * 5.2)), 12);
-    fixtures.beacon.emissiveIntensity = night * pulse * 3.8;
   };
+
+  const landingPort = aircraftLights.mounts.landingPort;
+  const landingStarboard = aircraftLights.mounts.landingStarboard;
+  const landingPosition = landingPort.position.clone().add(landingStarboard.position).multiplyScalar(0.5);
+  const landingDirection = new THREE.Vector3(0, 0, 1)
+    .applyQuaternion(landingPort.quaternion)
+    .add(new THREE.Vector3(0, 0, 1).applyQuaternion(landingStarboard.quaternion))
+    .normalize();
+  // The two physical housings are the single landing light's mounting basis.
+  // Aim below the aircraft while following their shared forward/downward axis.
+  landingDirection.y = Math.min(-0.2, landingDirection.y);
+  landingDirection.normalize();
+  landingSpot.position.copy(landingPosition);
+  landingSpot.target.position.copy(landingPosition).addScaledVector(landingDirection, 20);
 
   const practicalPosition = new THREE.Vector3();
   return {
     update(state, nightStrength, sunIntensity) {
       const night = clamp01(nightStrength);
       const time = state.timeSec;
-      updateEmissives(night, time);
+      updateEmissives(night);
+      updateAircraftLightEmission(aircraftLights, night, time);
 
       const altitude = Math.max(0, state.position.y);
-      landingSpot.target.position.set(0, -Math.max(8, altitude + 5), -Math.max(14, (altitude + 5) * 0.92));
+      landingSpot.position.copy(landingPosition);
+      const downRange = Math.max(8, altitude + 5) / Math.max(0.2, -landingDirection.y);
+      const forwardRange = Math.max(14, (altitude + 5) * 0.92) / Math.max(0.2, Math.abs(landingDirection.z));
+      landingSpot.target.position.copy(landingPosition).addScaledVector(landingDirection, Math.max(downRange, forwardRange));
       landingSpot.intensity = night * 14_000;
 
       const nearShip = Math.hypot(state.position.x - mission.ship.x, state.position.z - landingZ) < 105;
@@ -291,7 +296,7 @@ export function createNightLighting(
       landingSpot.shadow.map = null;
       const geometries = new Set<THREE.BufferGeometry>();
       const materials = new Set<THREE.Material>();
-      for (const group of [...fixtureGroups, aircraftLights]) {
+      for (const group of fixtureGroups) {
         group.traverse((object) => {
           const mesh = object as THREE.Mesh;
           if (mesh.geometry) geometries.add(mesh.geometry);
