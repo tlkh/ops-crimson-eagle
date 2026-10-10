@@ -242,11 +242,11 @@ export function createAircraft(campaign: Campaign) {
   const hook=mesh(solid,new THREE.TorusGeometry(.16,.04,6,12,Math.PI*1.7),dark,[0,-1.76,0]); hook.rotation.y=Math.PI/2;
 
   const rotors: THREE.Group[]=[];
-  const rotorMat=mat('#222823',.56,{transparent:true});
+  const rotorMat=mat('#222823',.56);
   for(const [z,y,sign] of [[-5.7,2.73,1],[6.15,3.18,-1]]) {
     cylinder(solid,.16,.38,[0,y-.1,z],metal);
     const rotor=new THREE.Group(); rotor.position.set(0,y,z); rotor.rotation.y=sign<0?Math.PI/3:0;
-    const disc=mesh(rotor,new THREE.CircleGeometry(9.145,64),new THREE.MeshBasicMaterial({map:rotorBlurTexture(),transparent:true,opacity:.8,depthWrite:false,side:THREE.DoubleSide})); disc.rotation.x=-Math.PI/2; disc.position.y=-.04; disc.castShadow=false;
+    const disc=mesh(rotor,new THREE.CircleGeometry(9.145,64),new THREE.MeshBasicMaterial({map:rotorBlurTexture(),transparent:true,opacity:.8,depthWrite:false,side:THREE.DoubleSide})); disc.rotation.x=-Math.PI/2; disc.position.y=-.04; disc.castShadow=false; disc.renderOrder=1;
     const blades:THREE.Mesh[]=[];
     for(let i=0;i<3;i++) {
       const g=new THREE.BoxGeometry(8.57,.055,.52); g.translate(4.86,0,0);

@@ -5,6 +5,8 @@ import { setRenderedTerrainHeights, setStructureColliders, setTreeColliders, ter
 import type { StructureCollider, TreeCollider } from '../sim/collision';
 import { createAtmosphere } from './atmosphere';
 import { createWater } from './water';
+import { createCoastalDetails } from './coastalDetails';
+import { createCoastalSampler } from './coastalSampling';
 
 type V = { x: number; z: number };
 const TAU = Math.PI * 2;
@@ -65,12 +67,13 @@ function treeWood() {
 /** Reference-informed, deliberately compressed lowland composition; not surveyed geography.
  * Keep all freshwater at y=0 and operational ground within 0.6 m of sim ground.
  * See docs/map-geometry-references.md for evidence and reconstruction boundaries. */
-export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mission) {
-  const atmosphere = createAtmosphere(scene, campaign, mission);
+export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mission, options: { preview?: boolean } = {}) {
+  const atmosphere = createAtmosphere(scene, campaign, mission, { preview: options.preview });
   const jp = campaign.id === 'jp_ketapang_2026_09';
   // Fixed theatre seed: the coastline and forest do not rearrange between sorties.
   const random = seeded(jp ? 62017 : 62135);
   const target = mission.shore ?? mission.lake;
+  const coastalSampler = createCoastalSampler(campaign, mission);
   const dx = target.x - mission.ship.x, dz = target.z - mission.ship.z;
   const routeLength = Math.max(1, Math.hypot(dx, dz));
   const ux = dx / routeLength, uz = dz / routeLength, sx = -uz, sz = ux;
@@ -80,13 +83,13 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     const first = m.shore ?? m.lake;
     return [[m.ship, first], [first, m.lake], [m.lake, m.fire]] as [V, V][];
   });
-  const coast = routeLength * .42;
-  const coastAt = (s: number) => coast + 34 * Math.sin(s * .003) + 19 * Math.sin(s * .008 + .5);
+  const coast = coastalSampler.coastStart;
+  const coastAt = coastalSampler.coastAt;
   const inland = 6500, lateral = 4700;
   // One height field drives both the visible mesh and the aircraft collision
   // envelope. A null result is open water, which this land mesh never samples.
   const terrainHeight = (x: number, z: number) => collisionTerrainHeight(campaign, mission, x, z) ?? -9;
-  const water = createWater(scene, campaign, mission);
+  const water = createWater(scene, campaign, mission, { reflections: !options.preview });
   water.surface(new THREE.PlaneGeometry(80000, 80000), 0, new THREE.Vector3(0, -9, 0));
 
   // Small repeating ground grain provides scale without a large downloaded texture.
@@ -213,8 +216,6 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   }
   for(let i=0;i<1100;i++){const a=random()*TAU,rad=lakeRadius(a)*(1.025+random()*.06);const x=mission.lake.x+Math.cos(a)*rad,z=mission.lake.z-Math.sin(a)*rad;dummy.position.set(x,.45,z);dummy.scale.set(.35+random()*.5,.8+random()*1.4,.35+random()*.5);dummy.rotation.set(0,random()*TAU,0);dummy.updateMatrix();reeds.setMatrixAt(reedCount++,dummy.matrix);}
   shrubs.count=shrubCount;reeds.count=reedCount;palmTrunks.count=palmCount;fronds.count=palmCount*7;scene.add(shrubs,reeds,palmTrunks,fronds);
-  setTreeColliders(mission, treeColliders);
-
   const timber = material('#79684c'), roof = material('#777d73'), wall = material('#b7aa8e'), dark = material('#343d36');
   const solidStructures: Array<{ object: THREE.Object3D; label: string }> = [];
   const settlement = new THREE.Group(); const village = fromLocal(settlementLocal.t, settlementLocal.s);
@@ -232,12 +233,6 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   block(settlement, [110, .28, 2.8], [85, 1.1, 0], timber);
   for (let i = 0; i < 9; i++) block(settlement, [.4, 2.6, .4], [35 + i * 12, -.1, 0], timber);
   scene.add(settlement);
-  const boats = new THREE.Group();
-  for (let i = 0; i < 3; i++) {
-    const boat = new THREE.Group(); block(boat, [1.8, .6, 9], [0, .3, 0], timber); block(boat, [1.5, .16, 5], [0, .62, 0], dark);
-    const p = fromLocal(lakeLocal.t + (i - 1) * 19, lakeLocal.s + r * .76); boat.position.set(p.x, .04, p.z); boat.rotation.y = Math.atan2(ux, uz) + .3; boats.add(boat);
-  }
-  scene.add(boats);
   if (mission.shore) {
     // Representative apron at the authored pad; dimensions informed by DGCA facilities listing.
     const apron = new THREE.Group(); apron.position.set(mission.shore.x, 0, mission.shore.z); apron.rotation.y = Math.atan2(ux, uz);
@@ -251,6 +246,12 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     for(const x of [220.6,249.4])block(apron,[.3,.02,1000],[x,.003,380],stripe);
     for(const z of [-95,845])for(const x of [-10,-6,-2,2,6,10])block(apron,[1.5,.02,22],[235+x,.005,z],stripe);
     for(const x of [-25,25])block(apron,[.25,.02,26],[x,.003,0],stripe);
+    // Solid geometry for the shore practical; lighting consumes this same local placement.
+    const apronLamp = new THREE.Group(); apronLamp.position.set(25, 0, 15);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(.045, .07, 11, 8), material('#38413c', .82));
+    pole.position.y = 5.5; apronLamp.add(pole);
+    block(apronLamp, [.78, .35, .44], [0, 10.05, 0], material('#29322f', .7));
+    apron.add(apronLamp); solidStructures.push({ object: apronLamp, label: 'shore floodlight pole' });
     // Low terminal, broad overhanging roof, shaded glazing and a compact control tower.
     const terminal = block(apron,[70,6,25],[85,3,128],wall);block(apron,[77,.4,31],[85,6.4,128],roof);
     solidStructures.push({ object: terminal, label: 'airport terminal' });
@@ -266,6 +267,9 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     const signCanvas=document.createElement('canvas');signCanvas.width=512;signCanvas.height=64;const signContext=signCanvas.getContext('2d')!;signContext.fillStyle='#d3d2b9';signContext.fillRect(0,0,512,64);signContext.fillStyle='#354b45';signContext.font='bold 30px sans-serif';signContext.textAlign='center';signContext.fillText('RAHADI OESMAN',256,43);const signTexture=new THREE.CanvasTexture(signCanvas);signTexture.colorSpace=THREE.SRGBColorSpace;const sign=new THREE.Mesh(new THREE.PlaneGeometry(24,3),new THREE.MeshBasicMaterial({map:signTexture}));sign.position.set(85,6.8,112.3);sign.rotation.y=Math.PI;apron.add(sign);
     scene.add(apron);
   }
+  const coastalDetails = createCoastalDetails(scene, campaign, mission, coastalSampler, flightLegs);
+  treeColliders.push(...coastalDetails.treeColliders);
+  setTreeColliders(mission, treeColliders);
   const structureColliders: StructureCollider[] = solidStructures.map(({ object, label }) => {
     object.updateWorldMatrix(true, true);
     const bounds = new THREE.Box3().setFromObject(object);
@@ -279,15 +283,15 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
       label,
     };
   });
+  structureColliders.push(...coastalDetails.structureColliders);
   setStructureColliders(mission, structureColliders);
   return {
-    update(time: number, camera?: THREE.Vector3, state?: SimState) {
+    update(time: number, camera?: THREE.Vector3, state?: SimState, nightStrength = 0) {
       water.update(time, state);
       atmosphere.update(time, camera, state);
-      // A slight boat bob gives the small lakeside craft a readable waterline.
-      boats.children.forEach((boat, i) => { boat.position.y = .04 + Math.sin(time * 1.1 + i * 2) * .065; boat.rotation.z = Math.sin(time * .8 + i) * .018; });
+      coastalDetails.update(time, nightStrength);
     },
-    dispose() { water.dispose(); },
-    terrainHeight, lake, shore, boats, route: { ux, uz, sx, sz, routeLength },
+    dispose() { coastalDetails.dispose(); water.dispose(); },
+    terrainHeight, lake, shore, boats: coastalDetails.boats, coastalStats: coastalDetails.stats, coastalLightingAnchor: coastalDetails.lightingAnchor, route: { ux, uz, sx, sz, routeLength },
   };
 }

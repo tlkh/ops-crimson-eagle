@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import type { Campaign, Mission, SimState } from '../types';
+import { evaluateTimeOfDay } from './timeOfDay';
+
+function colorFromRgb(rgb: readonly [number, number, number]): THREE.Color {
+  return new THREE.Color().setRGB(rgb[0], rgb[1], rgb[2]);
+}
 
 function seeded(seed: number) {
   let state = seed >>> 0 || 1;
@@ -53,18 +58,29 @@ function makeCloudLayer(count: number, texture: THREE.Texture, opacity: number, 
 }
 
 /** Lightweight authored humid-tropical atmosphere; no date-specific weather assertion. */
-export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission: Mission) {
+export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission: Mission, options: { preview?: boolean } = {}) {
+  // Static overhead previews have no horizon, so a sky dome and cloud decks
+  // only add work and can obscure the map. Keep the terrain lighting to the
+  // preview renderer instead.
+  if (options.preview) {
+    scene.fog = null;
+    return { update(_time?: number, _camera?: THREE.Vector3, _state?: SimState) {}, dispose() {} };
+  }
+
   const jp = campaign.id === 'jp_ketapang_2026_09';
-  const horizonColor = new THREE.Color(jp ? '#d3cdbc' : '#d0d9cb');
-  scene.fog = new THREE.FogExp2(jp ? '#b8b7a9' : '#bac8bc', jp ? .00016 : .00013);
+  const initialTime = evaluateTimeOfDay(mission, 0);
+  const horizonColor = colorFromRgb(initialTime.skyHorizon);
+  scene.fog = new THREE.FogExp2(colorFromRgb(initialTime.fogColor), jp ? .00016 : .00013);
   const sky = new THREE.Mesh(new THREE.SphereGeometry(60000, 32, 16), new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
     fog: false,
     uniforms: {
-      zenith: { value: new THREE.Color(jp ? '#6f95a7' : '#719eae') },
+      zenith: { value: colorFromRgb(initialTime.skyZenith) },
       horizon: { value: horizonColor },
-      sunDirection: { value: new THREE.Vector3(-.52, .8, -.26).normalize() },
+      sunDirection: { value: new THREE.Vector3(...initialTime.sunDirection) },
+      sunColor: { value: colorFromRgb(initialTime.sunColor) },
+      sunVisibility: { value: THREE.MathUtils.smoothstep(initialTime.sunDirection[1], -.025, .03) },
     },
     vertexShader: 'varying vec3 direction; void main(){ direction=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }',
     fragmentShader: `
@@ -72,16 +88,18 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
       uniform vec3 zenith;
       uniform vec3 horizon;
       uniform vec3 sunDirection;
+      uniform vec3 sunColor;
+      uniform float sunVisibility;
       void main() {
         vec3 d = normalize(direction);
         float upper = pow(max(d.y, 0.0), .48);
         vec3 skyColor = mix(horizon, zenith, upper);
         float hazeBand = exp(-max(d.y, 0.0) * 15.0);
         skyColor = mix(skyColor, horizon, hazeBand * .43);
-        float sun = max(dot(d, sunDirection), 0.0);
-        skyColor += vec3(1.0, .84, .61) * pow(sun, 15.0) * .075;
-        skyColor += vec3(1.0, .95, .79) * pow(sun, 180.0) * .66;
-        skyColor += vec3(1.0, .95, .78) * smoothstep(.99972, .99992, sun) * 1.7;
+        float sun = max(dot(d, sunDirection), 0.0) * sunVisibility;
+        skyColor += sunColor * pow(sun, 15.0) * .09;
+        skyColor += sunColor * pow(sun, 180.0) * .72;
+        skyColor += sunColor * smoothstep(.99972, .99992, sun) * 1.7;
         gl_FragColor = vec4(skyColor, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -95,6 +113,8 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
   const highTexture = cloudTexture(mission.seed + 1709, true);
   const lowClouds = makeCloudLayer(48, lowTexture, .52, true);
   const highClouds = makeCloudLayer(30, highTexture, .30, true);
+  const lowCloudMaterial = lowClouds.material as THREE.MeshBasicMaterial;
+  const highCloudMaterial = highClouds.material as THREE.MeshBasicMaterial;
   const lowDummy = new THREE.Object3D();
   const highDummy = new THREE.Object3D();
   const rand = seeded(mission.seed + 887);
@@ -137,13 +157,27 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
 
   const wind = mission.wind;
   const ambientFog = scene.fog as THREE.FogExp2;
-  const cleanFogColor = ambientFog.color.clone();
   const smokeFogColor = new THREE.Color('#aaa58d');
   const baselineDensity = ambientFog.density;
   const windLength = Math.max(.1, Math.hypot(wind.x, wind.z));
   return {
     update(time: number, camera?: THREE.Vector3, state?: SimState) {
       if (camera) sky.position.copy(camera);
+      const timeOfDay = evaluateTimeOfDay(mission, time);
+      const uniforms = (sky.material as THREE.ShaderMaterial).uniforms;
+      uniforms.zenith.value.copy(colorFromRgb(timeOfDay.skyZenith));
+      uniforms.horizon.value.copy(colorFromRgb(timeOfDay.skyHorizon));
+      uniforms.sunDirection.value.set(...timeOfDay.sunDirection);
+      uniforms.sunColor.value.copy(colorFromRgb(timeOfDay.sunColor));
+      uniforms.sunVisibility.value = THREE.MathUtils.smoothstep(timeOfDay.sunDirection[1], -.025, .03);
+      const nightTint = colorFromRgb(timeOfDay.ambientColor);
+      lowCloudMaterial.color.setRGB(1, 1, 1).lerp(nightTint, timeOfDay.nightStrength * .56);
+      highCloudMaterial.color.setRGB(1, 1, 1).lerp(nightTint, timeOfDay.nightStrength * .46);
+      lowCloudMaterial.opacity = .52 - timeOfDay.nightStrength * .18;
+      highCloudMaterial.opacity = .30 - timeOfDay.nightStrength * .11;
+      const baseFogColor = colorFromRgb(timeOfDay.fogColor);
+      ambientFog.color.copy(baseFogColor);
+      ambientFog.density = baselineDensity * (1 + timeOfDay.nightStrength * .28);
       const drift = Math.min(2600, Math.max(-2600, time * .34));
       lowClouds.position.set(wind.x * drift, 0, wind.z * drift);
       highClouds.position.set(wind.x * drift * .62, 0, wind.z * drift * .62);
@@ -160,8 +194,8 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
         const active = !state || state.fireState === 'burning' || state.fireState === 'surface_suppressed' || state.fireState === 'being_secured';
         const heat = active ? Math.min(1, (state?.fireHeat ?? 100) / 100) : 0;
         const smoke = density * heat;
-        ambientFog.density = baselineDensity + smoke * .0008;
-        ambientFog.color.copy(cleanFogColor).lerp(smokeFogColor, smoke * .42);
+        ambientFog.density += smoke * .0008;
+        ambientFog.color.lerp(smokeFogColor, smoke * .42);
       }
     },
   };

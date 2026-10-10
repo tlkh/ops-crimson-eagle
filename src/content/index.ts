@@ -17,6 +17,7 @@ const singaporeMissions: Mission[] = [
     peat: false,
     protectedLabel: 'Fictional practice huts',
     durationTargetSec: 300,
+    timeOfDay: { startMinutes: 330, endMinutes: 480 },
   },
   {
     id: 'SG-02',
@@ -33,6 +34,7 @@ const singaporeMissions: Mission[] = [
     peat: false,
     protectedLabel: 'Fictional lakeside homes',
     durationTargetSec: 300,
+    timeOfDay: { startMinutes: 480, endMinutes: 720 },
   },
   {
     id: 'SG-03',
@@ -49,6 +51,7 @@ const singaporeMissions: Mission[] = [
     peat: true,
     protectedLabel: 'Fictional village access track',
     durationTargetSec: 300,
+    timeOfDay: { startMinutes: 720, endMinutes: 1050 },
   },
   {
     id: 'SG-04',
@@ -65,6 +68,7 @@ const singaporeMissions: Mission[] = [
     peat: false,
     protectedLabel: 'Fictional community fish pens',
     durationTargetSec: 300,
+    timeOfDay: { startMinutes: 1050, endMinutes: 1110 },
   },
   {
     id: 'SG-05',
@@ -81,6 +85,7 @@ const singaporeMissions: Mission[] = [
     peat: false,
     protectedLabel: 'Fictional community jetty',
     durationTargetSec: 300,
+    timeOfDay: { startMinutes: 1110, endMinutes: 1200 },
   },
   {
     id: 'SG-06',
@@ -97,6 +102,7 @@ const singaporeMissions: Mission[] = [
     peat: true,
     protectedLabel: 'Fictional forest buffer',
     durationTargetSec: 300,
+    timeOfDay: { startMinutes: 1200, endMinutes: 1770 },
   },
 ];
 
@@ -117,6 +123,7 @@ const japanMissions: Mission[] = [
     peat: false,
     protectedLabel: 'Fictional practice huts',
     durationTargetSec: 300,
+    timeOfDay: { startMinutes: 330, endMinutes: 480 },
   },
   {
     id: 'JP-02',
@@ -134,6 +141,7 @@ const japanMissions: Mission[] = [
     peat: false,
     protectedLabel: 'Fictional Ketapang village-edge homes',
     durationTargetSec: 300,
+    timeOfDay: { startMinutes: 480, endMinutes: 720 },
   },
   {
     id: 'JP-03',
@@ -151,6 +159,7 @@ const japanMissions: Mission[] = [
     peat: true,
     protectedLabel: 'Fictional roadside homes',
     durationTargetSec: 300,
+    timeOfDay: { startMinutes: 720, endMinutes: 1050 },
   },
   {
     id: 'JP-04',
@@ -168,6 +177,7 @@ const japanMissions: Mission[] = [
     peat: false,
     protectedLabel: 'Fictional forest drainage buffer',
     durationTargetSec: 300,
+    timeOfDay: { startMinutes: 1050, endMinutes: 1110 },
   },
   {
     id: 'JP-05',
@@ -185,6 +195,7 @@ const japanMissions: Mission[] = [
     peat: true,
     protectedLabel: 'Fictional community access road',
     durationTargetSec: 300,
+    timeOfDay: { startMinutes: 1110, endMinutes: 1200 },
   },
   {
     id: 'JP-06',
@@ -202,6 +213,7 @@ const japanMissions: Mission[] = [
     peat: false,
     protectedLabel: 'Fictional settlement buffer',
     durationTargetSec: 300,
+    timeOfDay: { startMinutes: 1200, endMinutes: 1770 },
   },
 ];
 

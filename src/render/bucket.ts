@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Campaign, Mission, SimState } from '../types';
 import type { ExtendedSimState, WaterPacket } from '../sim/types';
-import { BUCKET_BODY_HEIGHT_M, BUCKET_LIFT_OFFSET_M, SLING_LENGTH_M,
+import { BUCKET_BODY_HEIGHT_M, BUCKET_FOOTPRINT_RADIUS_M, BUCKET_LIFT_OFFSET_M, SLING_LENGTH_M,
   bucketMinimumRimHeight, bucketSurfaceHeight, getBucketHook } from '../sim/bucket';
 
 const TAU = Math.PI * 2;
@@ -36,9 +36,9 @@ export function createBucketRig(scene: THREE.Scene) {
     mesh.castShadow = true; mesh.receiveShadow = true; bucket.add(mesh); return mesh;
   }
   // A broad fabric bag sized for the five-tonne game load. Its bottom is closed.
-  part(new THREE.CylinderGeometry(1.18, .90, BUCKET_BODY_HEIGHT_M, 32, 3, true), fabric, -BUCKET_BODY_HEIGHT_M / 2);
+  part(new THREE.CylinderGeometry(BUCKET_FOOTPRINT_RADIUS_M, .90, BUCKET_BODY_HEIGHT_M, 32, 3, true), fabric, -BUCKET_BODY_HEIGHT_M / 2);
   part(new THREE.CylinderGeometry(.90, .82, .12, 24), webbing, -BUCKET_BODY_HEIGHT_M + .06);
-  for (const [height, radius] of [[0, 1.18], [-1.29, .925]]) {
+  for (const [height, radius] of [[0, BUCKET_FOOTPRINT_RADIUS_M], [-1.29, .925]]) {
     const rim = part(new THREE.TorusGeometry(radius, .045, 7, 32), rimMaterial, height);
     rim.rotation.x = Math.PI / 2;
   }

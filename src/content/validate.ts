@@ -2,6 +2,7 @@ import type { Campaign, CampaignId, Mission } from '../types';
 
 const REQUIRED_CAMPAIGNS: CampaignId[] = ['sg_fictional_2026_10', 'jp_ketapang_2026_09'];
 const EARTHLY_SOURCE_CUTOFF = '2026-10-09';
+const REQUIRED_TIME_WINDOWS = [[330, 480], [480, 720], [720, 1050], [1050, 1110], [1110, 1200], [1200, 1770]] as const;
 
 function distance(a: { x: number; z: number }, b: { x: number; z: number }): number {
   return Math.hypot(a.x - b.x, a.z - b.z);
@@ -41,6 +42,15 @@ function validateMission(campaign: Campaign, mission: Mission, index: number, is
   }
   if (mission.durationTargetSec < 180 || mission.durationTargetSec > 600) {
     issues.push(`${path}: target duration must fit the compact playable sortie window (180–600 seconds).`);
+  }
+  if (!Number.isFinite(mission.timeOfDay?.startMinutes) || !Number.isFinite(mission.timeOfDay?.endMinutes) ||
+      mission.timeOfDay.startMinutes < 0 || mission.timeOfDay.startMinutes >= 1440 ||
+      mission.timeOfDay.endMinutes <= mission.timeOfDay.startMinutes || mission.timeOfDay.endMinutes > 2880) {
+    issues.push(`${path}: time of day must be an ascending minute interval starting within a day and ending within two days.`);
+  }
+  const expectedTimeWindow = REQUIRED_TIME_WINDOWS[index];
+  if (expectedTimeWindow && (mission.timeOfDay?.startMinutes !== expectedTimeWindow[0] || mission.timeOfDay?.endMinutes !== expectedTimeWindow[1])) {
+    issues.push(`${path}: time of day must match mission ${index + 1}'s authored campaign interval.`);
   }
   if (!isDateInside(mission.date, '2026-09-23', EARTHLY_SOURCE_CUTOFF)) {
     issues.push(`${path}: mission date falls outside the dated scenario window.`);

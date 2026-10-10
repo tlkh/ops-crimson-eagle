@@ -2,13 +2,19 @@ import type { Campaign, CampaignId, FlightCommand, Mission, SimState } from '../
 import type { ExtendedSimState } from '../sim/types';
 import { getObjectiveAction } from '../sim';
 import { createFlightHud } from './flightHud';
-import { isBucketTouchingLake } from '../sim/bucket';
+import { bucketReadyForDeckRecovery, isBucketFootprintOverDeck, isBucketTouchingLake } from '../sim/bucket';
+import { shouldObserveFire } from '../sim/fireWork';
 import { FLIGHT_STICK_RESPONSE, mapStickResponse, normalizeStickVector } from './stickResponse';
+import { musicTracks } from '../music';
+import { createMenu } from './menu';
+import { cinematicEffectsEnabled, setCinematicEffectsEnabled } from '../visualPreferences';
 
 type Callbacks = {
-  onSelect(campaignId: CampaignId, missionId: string): void;
+  onSelect(campaignId: CampaignId, missionId: string): Promise<void>;
   onCommand(name: string): void;
   onControls(command: Partial<FlightCommand>): void;
+  onMusicToggle(enabled: boolean): void;
+  onVoiceToggle(enabled: boolean): void;
 };
 
 const escapeText = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -16,7 +22,7 @@ const fmtFuel = (value: number) => `${Math.max(0, Math.round(value)).toLocaleStr
 const fmtWater = (value: number) => `${Math.max(0, Math.round(value)).toLocaleString()} L`;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
-function icon(name: 'map' | 'pause' | 'play' | 'home' | 'target' | 'water' | 'close' | 'lock' | 'restart' | 'arrow') {
+function icon(name: 'map' | 'pause' | 'play' | 'home' | 'target' | 'water' | 'close' | 'lock' | 'restart' | 'arrow' | 'music' | 'musicOff' | 'radio' | 'radioOff' | 'operations') {
   const paths: Record<typeof name, string> = {
     map: '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>',
     pause: '<path d="M8 5v14M16 5v14"/>',
@@ -28,29 +34,26 @@ function icon(name: 'map' | 'pause' | 'play' | 'home' | 'target' | 'water' | 'cl
     lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
     restart: '<path d="M4 11a8 8 0 1 1 2.3 5.7"/><path d="M4 5v6h6"/>',
     arrow: '<path d="M4 12h16M13 5l7 7-7 7"/>',
+    music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+    musicOff: '<path d="M9 13V5l12-2v8M3 21 21 3"/><circle cx="6" cy="18" r="3"/>',
+    radio: '<rect x="3" y="8" width="18" height="12" rx="2"/><path d="m7 8 10-5M7 12h5M7 16h3"/><circle cx="17" cy="15" r="2"/>',
+    radioOff: '<rect x="3" y="8" width="18" height="12" rx="2"/><path d="m7 8 10-5M7 12h5M3 21 21 3"/>',
+    operations: '<rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="3.5" width="7" height="7" rx="1"/><rect x="3.5" y="13.5" width="7" height="7" rx="1"/><rect x="13.5" y="13.5" width="7" height="7" rx="1"/>',
   };
   return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths[name]}</svg>`;
 }
 
-function campaignCopy(campaign: Campaign) {
-  if (campaign.id === 'sg_fictional_2026_10') return {
-    location: 'Seruyan · Central Kalimantan',
-    copy: 'Due to hazardous levels of haze affecting Singapore, the SAF forward deploys RSS Persistence, an LST, and an RSAF Chinook crew to aid firefighting efforts in the Seruyan area.',
-    date: 'October 2026',
-    aircraft: 'RSAF CH-47F Chinook',
-    ship: 'RSS Persistence',
-    shipClass: 'Endurance-class LST · 209',
-    paint: 'sg',
-  };
-  return {
-    location: 'Ketapang · West Kalimantan',
-    copy: 'Deploy with JS Kunisaki and a JGSDF Chinook crew to support firefighting around Ketapang. Fly reconstructed sorties inspired by Japan’s September 2026 deployment to Indonesia.',
-    date: '23–29 September 2026',
-    aircraft: 'JGSDF CH-47JA Chinook',
-    ship: 'JS Kunisaki',
-    shipClass: 'Ōsumi-class LST · LST-4003',
-    paint: 'jp',
-  };
+function musicButton(className: string) {
+  return `<button class="${className}" type="button" data-music-toggle data-tooltip="Turn music off" aria-pressed="true" aria-label="Turn music off">${icon('music')}<span>Music on</span></button>`;
+}
+
+function radioButton(className: string) {
+  return `<button class="${className}" type="button" data-radio-toggle data-tooltip="Turn radio off" aria-pressed="true" aria-label="Turn radio off">${icon('radio')}<span>Radio on</span></button>`;
+}
+
+function musicCreditsMarkup() {
+  const credits = Object.entries(musicTracks).map(([slot, track]) => `<li><b>${slot === 'menu' ? 'Menu' : escapeText(slot)}</b> · <a href="${escapeText(track.sourceUrl)}" target="_blank" rel="noopener noreferrer">“${escapeText(track.title)}”</a> by ${track.artist === 'Scott Buckley' ? '<a href="https://www.scottbuckley.com.au/" target="_blank" rel="noopener noreferrer">Scott Buckley</a>' : escapeText(track.artist)} · released under <a href="${escapeText(track.licenseUrl)}" target="_blank" rel="noopener noreferrer">${escapeText(track.license)}</a>${track.changes ? ` · ${escapeText(track.changes)}` : ''}</li>`).join('');
+  return `<details class="sf-music-credits"><summary>Music credits</summary><ol>${credits}</ol></details>`;
 }
 
 function phaseName(phase: SimState['phase']) {
@@ -87,7 +90,7 @@ function bucketPositionCue(state: SimState) {
   };
 }
 
-export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Campaign[]): {
+export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Campaign[], initialMusicEnabled: boolean, initialVoiceEnabled: boolean): {
   showMenu(): void;
   showGame(state: SimState, campaign: Campaign, mission: Mission, landingFuel: number): void;
   setPaused(paused: boolean): void;
@@ -113,16 +116,18 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
             <span data-campaign-name></span>
           </div>
           <div class="sf-top-actions">
-            <button class="sf-icon-button" type="button" data-map aria-label="Open tactical map" aria-pressed="false">${icon('map')}<span>Map</span></button>
-            <button class="sf-icon-button" type="button" data-pause aria-label="Pause sortie">${icon('pause')}<span>Pause</span></button>
-            <button class="sf-menu-button" type="button" data-menu-button>Operations</button>
+            ${musicButton('sf-icon-button sf-flight-music')}
+            ${radioButton('sf-icon-button sf-flight-radio')}
+            <button class="sf-icon-button" type="button" data-map data-tooltip="Open tactical map" aria-label="Open tactical map" aria-pressed="false">${icon('map')}<span>Map</span></button>
+            <button class="sf-icon-button" type="button" data-pause data-tooltip="Pause sortie" aria-label="Pause sortie">${icon('pause')}<span>Pause</span></button>
+            <button class="sf-menu-button sf-icon-button" type="button" data-menu-button data-tooltip="Operations" aria-label="Operations">${icon('operations')}<span>Operations</span></button>
           </div>
         </header>
         <div class="sf-readouts">
           <div class="sf-objective" data-objective role="group" aria-labelledby="sf-next-step-title" aria-describedby="sf-next-step-detail">
-            <span class="sf-objective-dot" aria-hidden="true"></span>
+            <span class="sf-objective-kicker">NEXT OBJECTIVE</span>
             <div class="sf-objective-copy">
-              <strong id="sf-next-step-title" data-objective-title>Next: Hold the marked target</strong>
+              <strong id="sf-next-step-title" data-objective-title>Hold the marked target</strong>
               <span id="sf-next-step-detail" data-objective-detail>Follow the marked objective.</span>
               <span class="sf-sr-only" data-objective-announcement role="status" aria-live="polite" aria-atomic="true"></span>
             </div>
@@ -169,7 +174,7 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
           </div>
         </div>
         <div class="sf-modal" data-pause-panel hidden role="dialog" aria-modal="true" aria-labelledby="sf-pause-title">
-          <div class="sf-modal-card"><button class="sf-modal-close" data-resume aria-label="Resume sortie">${icon('close')}</button><h2 id="sf-pause-title">Sortie paused</h2><p>Take a breath. Your aircraft and sling load are waiting where you left them.</p><div class="sf-modal-actions"><button class="sf-primary" data-resume>${icon('play')} Resume sortie</button><button data-restart>${icon('restart')} Restart mission</button><button data-briefing>${icon('arrow')} Mission selection</button></div></div>
+          <div class="sf-modal-card"><button class="sf-modal-close" data-resume aria-label="Resume sortie">${icon('close')}</button><h2 id="sf-pause-title">Sortie paused</h2><p>Take a breath. Your aircraft and sling load are waiting where you left them.</p>${musicButton('sf-menu-music sf-pause-music')}${radioButton('sf-menu-music sf-pause-radio')}<button type="button" class="sf-menu-music" data-cinematic aria-pressed="${cinematicEffectsEnabled()}">Cinematic effects ${cinematicEffectsEnabled() ? 'on' : 'off'}</button><div class="sf-modal-actions"><button class="sf-primary" data-resume>${icon('play')} Resume sortie</button><button data-restart>${icon('restart')} Restart mission</button><button data-briefing>${icon('arrow')} Mission selection</button></div></div>
         </div>
         <div class="sf-modal" data-outcome-panel hidden role="dialog" aria-modal="true" aria-labelledby="sf-outcome-title">
           <div class="sf-modal-card"><span class="sf-outcome-mark" data-outcome-mark></span><h2 data-outcome-title id="sf-outcome-title">Debrief</h2><p data-outcome-copy></p><div class="sf-modal-actions"><button class="sf-primary" data-restart>${icon('restart')} Fly again</button><button data-briefing>${icon('arrow')} Choose another mission</button></div></div>
@@ -177,6 +182,13 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
       </section>
     </main>`;
 
+  const cinematicButton = root.querySelector<HTMLButtonElement>('[data-cinematic]')!;
+  cinematicButton.addEventListener('click', () => {
+    const enabled = !cinematicEffectsEnabled();
+    setCinematicEffectsEnabled(enabled);
+    cinematicButton.setAttribute('aria-pressed', String(enabled));
+    cinematicButton.textContent = `Cinematic effects ${enabled ? 'on' : 'off'}`;
+  });
   const app = root.querySelector<HTMLElement>('.sf-app')!;
   const sceneHost = root.querySelector<HTMLElement>('[data-scene-host]')!;
   const menu = root.querySelector<HTMLElement>('[data-menu]')!;
@@ -185,10 +197,14 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
   const pausePanel = root.querySelector<HTMLElement>('[data-pause-panel]')!;
   const outcomePanel = root.querySelector<HTMLElement>('[data-outcome-panel]')!;
   const by = <T extends Element = HTMLElement>(selector: string) => root.querySelector<T>(selector)!;
-  const flightHud = createFlightHud(by<HTMLElement>('[data-flight-hud]'));
+  const flightHudHost = by<HTMLElement>('[data-flight-hud]');
+  const flightHud = createFlightHud(flightHudHost);
+  by<HTMLElement>('[data-objective]').after(flightHudHost.querySelector('.sf-compass')!);
   let mapOpen = false;
   let paused = false;
   let disposed = false;
+  let musicEnabled = initialMusicEnabled;
+  let voiceEnabled = initialVoiceEnabled;
   let currentCampaign: Campaign | undefined;
   let currentMission: Mission | undefined;
   let lastTick = -1;
@@ -196,8 +212,60 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
   let crashStartedAt: number | null = null;
   let activeDialog: HTMLElement | null = null;
   let dialogReturnFocus: HTMLElement | null = null;
+  let objectiveTitleAnimation: Animation | null = null;
+  const objectiveTitleNode = by<HTMLElement>('[data-objective-title]');
+  const cancelObjectiveTitleAnimation = () => {
+    objectiveTitleAnimation?.cancel();
+    objectiveTitleAnimation = null;
+  };
+  const setObjectiveTitle = (title: string) => {
+    if (objectiveTitleNode.textContent === title) return;
+    cancelObjectiveTitleAnimation();
+    objectiveTitleNode.textContent = title;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || typeof objectiveTitleNode.animate !== 'function') return;
+    const animation = objectiveTitleNode.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 140, easing: 'ease-out' });
+    objectiveTitleAnimation = animation;
+    animation.addEventListener('finish', () => {
+      if (objectiveTitleAnimation !== animation) return;
+      objectiveTitleAnimation = null;
+      animation.cancel();
+    }, { once: true });
+  };
   const axes = { yaw: 0, climb: 0, cyclicX: 0, cyclicY: 0 };
   const on = (selector: string, event: string, handler: (e: Event) => void) => by(selector).addEventListener(event, handler);
+  const syncMusicButtons = () => root.querySelectorAll<HTMLButtonElement>('[data-music-toggle]').forEach(button => {
+    const label = `Turn music ${musicEnabled ? 'off' : 'on'}`;
+    button.setAttribute('aria-pressed', String(musicEnabled));
+    button.setAttribute('aria-label', label);
+    button.dataset.tooltip = label;
+    button.innerHTML = `${icon(musicEnabled ? 'music' : 'musicOff')}<span>Music ${musicEnabled ? 'on' : 'off'}</span>`;
+  });
+  const syncRadioButtons = () => root.querySelectorAll<HTMLButtonElement>('[data-radio-toggle]').forEach(button => {
+    const label = `Turn radio ${voiceEnabled ? 'off' : 'on'}`;
+    button.setAttribute('aria-pressed', String(voiceEnabled));
+    button.setAttribute('aria-label', label);
+    button.dataset.tooltip = label;
+    button.innerHTML = `${icon(voiceEnabled ? 'radio' : 'radioOff')}<span>Radio ${voiceEnabled ? 'on' : 'off'}</span>`;
+  });
+  const syncMapButton = () => {
+    const label = `${mapOpen ? 'Close' : 'Open'} tactical map`;
+    const button = by<HTMLButtonElement>('[data-map]');
+    button.setAttribute('aria-pressed', String(mapOpen));
+    button.setAttribute('aria-label', label);
+    button.dataset.tooltip = label;
+  };
+  root.addEventListener('click', event => {
+    if (!(event.target instanceof Element) || !event.target.closest('[data-music-toggle]')) return;
+    musicEnabled = !musicEnabled;
+    callbacks.onMusicToggle(musicEnabled);
+    syncMusicButtons();
+  });
+  root.addEventListener('click', event => {
+    if (!(event.target instanceof Element) || !event.target.closest('[data-radio-toggle]')) return;
+    voiceEnabled = !voiceEnabled;
+    callbacks.onVoiceToggle(voiceEnabled);
+    syncRadioButtons();
+  });
   const setAxis = (name: keyof typeof axes, value: number) => {
     axes[name] = Math.round(clamp(value, -1, 1) * 100) / 100;
     callbacks.onControls({ [name]: axes[name] });
@@ -230,152 +298,32 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     paused = value;
     pausePanel.hidden = !paused;
     syncDialog(paused ? pausePanel : outcomePanel.hidden ? null : outcomePanel);
-    by('[data-pause]').setAttribute('aria-pressed', String(paused));
-    by('[data-pause]').innerHTML = `${icon(paused ? 'play' : 'pause')}<span>${paused ? 'Resume' : 'Pause'}</span>`;
+    const button = by<HTMLButtonElement>('[data-pause]');
+    const label = paused ? 'Resume sortie' : 'Pause sortie';
+    button.setAttribute('aria-pressed', String(paused));
+    button.setAttribute('aria-label', label);
+    button.dataset.tooltip = label;
+    button.innerHTML = `${icon(paused ? 'play' : 'pause')}<span>${paused ? 'Resume' : 'Pause'}</span>`;
   };
   const resetTransientUI = () => {
+    cancelObjectiveTitleAnimation();
     crashStartedAt = null;
     game.dataset.crashing = 'false';
     mapOpen = false;
     mapPanel.hidden = true;
-    by('[data-map]').setAttribute('aria-pressed', 'false');
+    syncMapButton();
     syncPaused(false);
     outcomePanel.hidden = true;
     syncDialog(null);
     releaseSticks();
   };
 
-  let menuHasOpened = false;
-  let selectedCampaignId: CampaignId | undefined;
-  const menuAnimations = new Set<Animation>();
-  const enterMenu = (direction: 'initial' | 'forward' | 'back', event?: Event) => {
-    menu.scrollTop = 0;
-    for (const animation of menuAnimations) animation.cancel();
-    menuAnimations.clear();
-    const keyboard = event instanceof MouseEvent && event.detail === 0;
-    if (keyboard) return;
-    const target = menu.querySelector<HTMLElement>(direction === 'initial' ? '.sf-campaign-grid' : '.sf-menu-inner');
-    if (!target) return;
-    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const from = reduced ? 'none' : direction === 'initial' ? 'translateY(6px)' : `translateX(${direction === 'forward' ? 10 : -10}px)`;
-    const animation = target.animate([{ opacity: 0, transform: from }, { opacity: 1, transform: 'none' }], {
-      duration: reduced ? 80 : direction === 'initial' ? 220 : 180,
-      easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
-    });
-    menuAnimations.add(animation);
-    animation.onfinish = () => menuAnimations.delete(animation);
-  };
-  const fleetMarkup = (campaign: Campaign) => `<span class="sf-fleet-portrait" data-fleet="${campaign.id}">
-    <img data-fleet-image alt="Side view of ${escapeText(campaignCopy(campaign).aircraft)} flying alongside ${escapeText(campaignCopy(campaign).ship)}" width="1200" height="420" hidden />
-    <span class="sf-fleet-loading">Preparing aircraft and ship view…</span>
-  </span>`;
-  const loadFleet = (campaign: Campaign) => {
-    const target = menu.querySelector<HTMLElement>(`[data-fleet="${campaign.id}"]`);
-    if (!target) return;
-    requestAnimationFrame(() => {
-      if (disposed || !target.isConnected) return;
-      void import('../render/campaignFleet').then(({ renderCampaignFleet }) => renderCampaignFleet(campaign)).then(url => {
-        if (disposed || !target.isConnected) return;
-        const image = target.querySelector<HTMLImageElement>('[data-fleet-image]')!;
-        image.src = url; image.hidden = false;
-        target.querySelector('.sf-fleet-loading')?.remove();
-      }).catch(() => {
-        if (target.isConnected) target.querySelector('.sf-fleet-loading')!.textContent = 'Aircraft and ship ready for deployment';
-      });
-    });
-  };
-  const kitMarkup = (campaign: Campaign) => {
-    const c = campaignCopy(campaign);
-    return `<span><small>Aircraft</small><b>${escapeText(c.aircraft)}</b></span><span><small>Home ship</small><b>${escapeText(c.ship)}</b><span class="sf-kit-detail">${escapeText(c.shipClass)}</span></span>`;
-  };
-
-  const renderCampaigns = (event?: Event) => {
-    const firstVisit = !menuHasOpened;
-    const ordered = [...campaigns].sort((a, b) => Number(b.id.startsWith('sg_')) - Number(a.id.startsWith('sg_')));
-    menu.innerHTML = `
-      <div class="sf-menu-inner">
-        <header class="sf-brand-block">
-          <img class="sf-brand-mark" src="${import.meta.env.BASE_URL}assets/crimson-eagle-mark.png" width="128" height="128" alt="" />
-          <div><h1>Ops Crimson Eagle</h1><p>Water where the fire needs it.</p></div>
-        </header>
-        <div class="sf-campaign-section-head"><h2>Choose your campaign</h2><span>02 campaigns</span></div>
-        <div class="sf-campaign-grid" data-campaign-grid></div>
-        <footer class="sf-credits">
-          <p>Created by <strong>Timothy Liu</strong></p>
-          <nav class="sf-credits-links" aria-label="Author and project links">
-            <a href="https://github.com/tlkh" target="_blank" rel="noopener noreferrer">GitHub <span>@tlkh</span></a>
-            <a href="https://www.instagram.com/tlkh/" target="_blank" rel="noopener noreferrer">Instagram <span>@tlkh</span></a>
-            <a class="sf-source-link" href="https://github.com/tlkh/ops-crimson-eagle" target="_blank" rel="noopener noreferrer">View source on GitHub <span aria-hidden="true">↗</span></a>
-          </nav>
-        </footer>
-      </div>`;
-    const grid = menu.querySelector<HTMLElement>('[data-campaign-grid]')!;
-    ordered.slice(0, 2).forEach((campaign, index) => {
-      const c = campaignCopy(campaign);
-      const card = document.createElement('button');
-      card.className = `sf-campaign-card sf-campaign-card--${c.paint}`;
-      card.type = 'button';
-      card.dataset.campaign = campaign.id;
-      card.setAttribute('aria-label', `Choose ${campaign.name} campaign`);
-      card.innerHTML = `
-        <span class="sf-campaign-top"><span class="sf-index">${index ? '02' : '01'}</span><span class="sf-campaign-date">${escapeText(c.date)}</span></span>
-        <span class="sf-campaign-title">${escapeText(campaign.name)}</span>
-        <span class="sf-campaign-subtitle">${escapeText(campaign.subtitle)}</span>
-        <span class="sf-campaign-art"><img src="${import.meta.env.BASE_URL}assets/${c.paint === 'sg' ? 'seruyan-satellite-fire.webp' : 'ketapang-satellite-fire.webp'}" alt="Satellite-inspired view of ${c.paint === 'sg' ? 'Seruyan' : 'Ketapang'} with fire and smoke" /><span class="sf-region-caption"><b>${escapeText(c.location)}</b><small>Satellite illustration</small></span></span>
-        <span class="sf-campaign-copy">${escapeText(c.copy)}</span>
-        ${fleetMarkup(campaign)}
-        <span class="sf-kit-line">${kitMarkup(campaign)}</span>
-        <span class="sf-select-line"><span>View ${campaign.missions.length} missions</span><span class="sf-select-arrow" aria-hidden="true">${icon('arrow')}</span></span>`;
-      card.addEventListener('click', event => renderMissions(campaign, event));
-      grid.appendChild(card);
-      loadFleet(campaign);
-    });
-    enterMenu(firstVisit ? 'initial' : 'back', event);
-    menuHasOpened = true;
-    if (event && selectedCampaignId) menu.querySelector<HTMLButtonElement>(`[data-campaign="${selectedCampaignId}"]`)?.focus({ preventScroll: true });
-  };
-
-  const renderMissions = (campaign: Campaign, event?: Event) => {
-    selectedCampaignId = campaign.id;
-    const c = campaignCopy(campaign);
-    const missions = campaign.missions;
-    menu.innerHTML = `
-      <div class="sf-menu-inner sf-mission-screen">
-        <button class="sf-back-button" type="button" data-back>${icon('arrow')} All campaigns</button>
-        <div class="sf-mission-heading"><div><span class="sf-mission-region">${escapeText(c.location)} · ${escapeText(c.date)}</span><h1 tabindex="-1">${escapeText(campaign.name)}</h1><span class="sf-mission-evidence">${escapeText(campaign.subtitle)}</span><p>${escapeText(c.copy)}</p></div><div class="sf-mission-fleet">${fleetMarkup(campaign)}<div class="sf-operation-facts">${kitMarkup(campaign)}</div></div></div>
-        <div class="sf-mission-section-head"><h2>Choose a sortie</h2><span>${missions.length} missions · about 5 minutes each</span></div>
-        <div class="sf-mission-list" data-mission-list></div>
-        <footer class="sf-menu-footer"><span>${escapeText(campaign.operator)}</span><span>${escapeText(c.date)}</span></footer>
-      </div>`;
-    menu.querySelector('[data-back]')!.addEventListener('click', renderCampaigns);
-    loadFleet(campaign);
-    enterMenu('forward', event);
-    if (event instanceof MouseEvent && event.detail === 0) menu.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true });
-    const list = menu.querySelector<HTMLElement>('[data-mission-list]')!;
-    let saved: Record<string, { score?: number; outcome?: string }> = {};
-    try {
-      const raw = localStorage.getItem(`progress:${campaign.id}`);
-      if (raw) {
-        const parsed: unknown = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) saved = parsed as typeof saved;
-      }
-    } catch { /* A blocked or malformed local save keeps later sorties locked. */ }
-    missions.forEach((mission, i) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'sf-mission-row';
-      const training = /training|practice/i.test(mission.title);
-      const previous = i > 0 ? missions[i - 1] : undefined;
-      const unlocked = training || !previous || saved[previous.id]?.outcome === 'success';
-      const lockNote = !unlocked && previous ? `Complete “${previous.title}” successfully to unlock this sortie.` : '';
-      button.disabled = !unlocked;
-      if (!unlocked) button.classList.add('is-locked');
-      button.setAttribute('aria-label', unlocked ? `Launch ${mission.title}` : `${mission.title}. Locked. ${lockNote}`);
-      button.innerHTML = `<span class="sf-mission-index">${String(i + 1).padStart(2, '0')}</span><span class="sf-mission-main"><span class="sf-mission-meta">${unlocked ? `${escapeText(mission.date)}${training ? ' · TRAINING' : ` · ${mission.requiredDrops} WATER RELEASES`}` : 'LOCKED · PREVIOUS SORTIE REQUIRED'}</span><strong>${escapeText(mission.title)}</strong><span>${escapeText(unlocked ? mission.description : lockNote)}</span></span><span class="sf-mission-go" aria-hidden="true">${icon(unlocked ? 'arrow' : 'lock')}</span>`;
-      if (unlocked) button.addEventListener('click', () => callbacks.onSelect(campaign.id, mission.id));
-      list.appendChild(button);
-    });
-  };
+  const menuController = createMenu(menu, campaigns, {
+    onLaunch: callbacks.onSelect,
+    musicButton: () => musicButton('sf-menu-music'),
+    musicCredits: musicCreditsMarkup,
+    syncMusic: syncMusicButtons,
+  });
 
   const positionMapMark = (selector: string, p: { x: number; z: number }, bounds: { minX: number; maxX: number; minZ: number; maxZ: number }) => {
     const el = by<HTMLElement>(selector);
@@ -454,20 +402,20 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
   on('[data-map]', 'click', () => {
     mapOpen = !mapOpen;
     mapPanel.hidden = !mapOpen;
-    by('[data-map]').setAttribute('aria-pressed', String(mapOpen));
+    syncMapButton();
     dispatchCommand('map');
   });
   on('[data-close-map]', 'click', () => {
     mapOpen = false;
     mapPanel.hidden = true;
-    by('[data-map]').setAttribute('aria-pressed', 'false');
+    syncMapButton();
     dispatchCommand('map');
   });
   on('[data-pause]', 'click', () => {
     if (mapOpen) {
       mapOpen = false;
       mapPanel.hidden = true;
-      by('[data-map]').setAttribute('aria-pressed', 'false');
+      syncMapButton();
       dispatchCommand('map');
     }
     syncPaused(!paused);
@@ -563,8 +511,8 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     resetTransientUI();
     lastTick = -1;
     lastTime = -1;
-    renderCampaigns();
-    if (returningFromGame) menu.querySelector<HTMLButtonElement>('.sf-campaign-card')?.focus();
+    menuController.showCampaigns();
+    if (returningFromGame) menu.querySelector<HTMLButtonElement>('.cm-campaign-card[aria-current="true"], .cm-campaign-card')?.focus();
   };
   const setPaused = (value: boolean) => syncPaused(value);
   const showGame = (state: SimState, campaign: Campaign, mission: Mission, landingFuel: number) => {
@@ -605,6 +553,32 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     by('[data-reserve]').textContent = fmtFuel(landingFuel);
     const guidance = extended.guidance;
     const objectiveAction = getObjectiveAction(state, campaign, mission);
+    const observingFire = shouldObserveFire(state, mission);
+    const deckRecoveryApproach = campaign.id === 'sg_fictional_2026_10' && state.bucketAttached &&
+      ['return', 'land'].includes(state.phase)
+      ? (() => {
+        if (bucketReadyForDeckRecovery(state, campaign, mission) && (guidance?.distanceM ?? Infinity) <= 5) {
+          return {
+            title: 'Descend vertically onto the landing spot',
+            detail: state.position.y > 10 ? 'The bucket is clear and over the deck. Descend vertically onto the marked landing spot.'
+              : Math.hypot(state.velocity.x, state.velocity.z) > 10 ? 'The bucket is clear and over the deck. Slow down before settling onto the landing spot.'
+                : 'The bucket is clear and over the deck. Settle vertically onto the marked landing spot.',
+          };
+        }
+        if (isBucketFootprintOverDeck(state, campaign, mission) && !bucketReadyForDeckRecovery(state, campaign, mission)) {
+          return {
+            title: 'Raise the bucket clear of the deck',
+            detail: 'Raise the bucket clear of the deck before descending; keep the aircraft above 26 m while the sling comes free.',
+          };
+        }
+        return {
+          title: 'Fly the bucket over the landing spot',
+          detail: state.position.y > 26
+            ? 'Move the hanging bucket over the marked landing spot while keeping the aircraft above 26 m.'
+            : 'Climb above 26 m to lift the bucket, then move it over the marked landing spot.',
+        };
+      })()
+      : null;
     const objectiveDistance = guidance?.distanceM ?? 0;
     const roundedDistance = Math.round(objectiveDistance / 10) * 10;
     const distanceText = roundedDistance >= 1000
@@ -628,14 +602,16 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
       shore_rig: 'Approach the shore pad to attach the bucket',
       transit: 'Fly to the freshwater lake',
       work: state.waterLitres >= 4500 ? 'Fly to the fire line and release water' : 'Fill the bucket at the freshwater lake',
-      return: campaign.id === 'jp_ketapang_2026_09' && state.bucketAttached ? 'Land at the shore pad to remove the bucket' : 'Return to the ship deck',
+      return: deckRecoveryApproach?.title ?? (campaign.id === 'jp_ketapang_2026_09' && state.bucketAttached ? 'Land at the shore pad to remove the bucket' : 'Return to the ship deck'),
       shore_unrig: 'Remove the bucket at the shore pad',
       deck_rig: state.bucketAttached ? 'Secure the bucket on the flight deck' : 'Attach the bucket on the flight deck',
       land: 'Settle onto the ship deck',
       debrief: 'Review the sortie debrief',
       failed: 'Review the sortie result',
     };
-    const nextTitle = objectiveAction ? contextualActions[objectiveAction].title : nextStepByPhase[state.phase];
+    const nextTitle = observingFire ? 'Observe fire cooling'
+      : objectiveAction ? contextualActions[objectiveAction].title
+        : deckRecoveryApproach?.title ?? nextStepByPhase[state.phase];
     const activeOperation = (() => {
       if (extended.dumping) {
         const startLitres = Math.max(0, extended.dumpStartedWithLitres);
@@ -643,6 +619,15 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
         return {
           title: 'Releasing water',
           detail: `Releasing load · ${Math.round(releasedPercent * 100)}% released · ${fmtWater(bucketLitres)} remaining.`,
+        };
+      }
+      if (observingFire) {
+        if (extended.waterPackets.length > 0 || state.airborneLitres > 1e-8) {
+          return { title: 'Observe water impact', detail: 'Falling water is still reaching the fire. Stay nearby and watch the cooling before leaving the fire line.' };
+        }
+        return {
+          title: 'Observe fire cooling',
+          detail: 'Water has suppressed the surface fire. Hold near the fire while the ground crew secures the line.',
         };
       }
       if (extended.fetching || extended.precisionAction === 'fetch') {
@@ -683,7 +668,9 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     let approachHint: string | undefined;
     if (!objectiveAction && guidance && objectiveDistance < 110) {
       const speed = Math.hypot(state.velocity.x, state.velocity.z);
-      if (guidance.label === 'Freshwater lake' && state.bucketAttached) {
+      if (deckRecoveryApproach) {
+        approachHint = deckRecoveryApproach.detail;
+      } else if (guidance.label === 'Freshwater lake' && state.bucketAttached) {
         approachHint = state.position.y > 36 ? 'Lower toward 25 m to dip the bucket.'
           : state.position.y < 15 ? 'Climb toward 25 m over the lake.'
             : speed > 12 ? 'Slow down over the lake to fetch water.'
@@ -709,13 +696,18 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
       : guidance
         ? `${distanceText} away. Face objective turns toward it.`
         : 'Follow the marked objective.';
-    by('[data-objective-title]').textContent = `${activeOperation ? 'In progress' : 'Next'}: ${activeOperation?.title ?? nextTitle}`;
+    by<HTMLElement>('.sf-objective-kicker').textContent = activeOperation ? 'IN PROGRESS' : 'NEXT OBJECTIVE';
+    setObjectiveTitle(activeOperation?.title ?? nextTitle);
     by('[data-objective-detail]').textContent = objectiveDetail;
-    const announcement = activeOperation
+    const announcement = observingFire && activeOperation?.title === 'Observe water impact'
+      ? 'Water is still falling onto the fire. Stay nearby and watch the cooling before leaving the fire line.'
+      : observingFire && activeOperation?.title === 'Observe fire cooling'
+      ? activeOperation.detail
+      : activeOperation
       ? `Bucket operation in progress: ${activeOperation.title}.`
       : objectiveAction
       ? `Next step: ${contextualActions[objectiveAction].title}. Action ready.`
-      : `Next step: ${nextStepByPhase[state.phase]}.`;
+      : `Next step: ${nextTitle}.`;
     const announcementNode = by('[data-objective-announcement]');
     if (announcementNode.textContent !== announcement) announcementNode.textContent = announcement;
     const message = by<HTMLElement>('[data-message]');
@@ -774,6 +766,7 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
   };
 
   showMenu();
+  syncRadioButtons();
   return {
     showMenu,
     showGame,
@@ -781,8 +774,8 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     getSceneHost: () => sceneHost,
     dispose() {
       disposed = true;
-      for (const animation of menuAnimations) animation.cancel();
-      menuAnimations.clear();
+      cancelObjectiveTitleAnimation();
+      menuController.dispose();
       releaseSticks();
       callbacks.onControls({ yaw: 0, climb: 0, cyclicX: 0, cyclicY: 0 });
       root.innerHTML = '';

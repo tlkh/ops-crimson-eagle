@@ -24,7 +24,13 @@ Follow the objective cues, manage the swinging bucket and water load, and watch 
 | R | Set the return route |
 | M / Escape | Map / pause |
 
-Touch controls provide two joysticks: collective/yaw on the left and cyclic movement on the right, plus on-screen action buttons.
+Touch controls provide two joysticks: collective/yaw on the left and cyclic movement on the right, plus on-screen action buttons. The flight HUD gives a clear observation step after the last water drop; once crews secure the fire, it advances to recovery.
+
+Singapore ship recovery requires carrying the bucket over the flight deck before descending vertically onto the marked spot. The ship menu preview shows a top-down view of the mission map and its labeled locations. Each sortie moves through its assigned time of day, with matching sky, sunlight, night lighting, and subtle proximity effects.
+
+The menu and each mission have their own background track. Music starts after your first interaction, rises gently during a fire attack, and recedes on the return. You can turn it off from the menu or during a sortie. [Music credits and source links](docs/music-credits.json) list all 13 selections.
+
+Radio calls begin with “SINGA TWO ONE” or “JAPAN THREE ONE” and give spoken objective, water, fuel, and recovery cues. Calls follow the same fire observation and bucket-safe ship recovery rules as the HUD. Radio has its own on/off control during a sortie and in the pause menu. The [voice cue manifest](docs/voice-cues.json) records every line and its generation source.
 
 ## Run locally
 

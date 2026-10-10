@@ -8,6 +8,11 @@ import { createShip } from './ships';
 import { createBucketRig } from './bucket';
 import { createGroundCrew } from './groundCrew';
 import { createHeightFog } from './heightFog';
+import { evaluateTimeOfDay } from './timeOfDay';
+import { createNightLighting } from './nightLighting';
+import { createProximityParticles } from './proximityParticles';
+import { createCinematicEffects } from './cinematicEffects';
+import { cinematicEffectsEnabled, onCinematicEffectsChange } from '../visualPreferences';
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
@@ -104,8 +109,11 @@ function createCrashEffect(scene: THREE.Scene) {
 export function createScene(container: HTMLElement): {
   update(state: SimState, campaign: Campaign, mission: Mission): void;
   dispose(): void;
+  diagnostics(): { calls: number; triangles: number; textures: number; geometries: number; frameMs: number };
 } {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'low-power' });
+  renderer.info.autoReset = false;
+  let lastFrameMs = 0;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -116,7 +124,8 @@ export function createScene(container: HTMLElement): {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#b8d2d1');
   scene.fog = new THREE.Fog('#b8d2d1', 24_000, 128_000);
-  scene.add(new THREE.HemisphereLight('#e4f0e8', '#637365', 2.25));
+  const ambient = new THREE.HemisphereLight('#e4f0e8', '#637365', 2.25);
+  scene.add(ambient);
   const sun = new THREE.DirectionalLight('#fff0cf', 3.5);
   sun.position.set(-104, 160, -52);
   sun.castShadow = true;
@@ -149,6 +158,17 @@ export function createScene(container: HTMLElement): {
   let groundCrew: ReturnType<typeof createGroundCrew> | undefined;
   let fire: ReturnType<typeof createFire> | undefined;
   let crashEffect: ReturnType<typeof createCrashEffect> | undefined;
+  let nightLighting: ReturnType<typeof createNightLighting> | undefined;
+  let proximityParticles: ReturnType<typeof createProximityParticles> | undefined;
+  const cinematic = createCinematicEffects(renderer);
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  let effectsEnabled = cinematicEffectsEnabled();
+  const unsubscribeEffects = onCinematicEffectsChange(enabled => { effectsEnabled = enabled; });
+  const cameraPrevious = new THREE.Vector3();
+  const cameraVelocity = new THREE.Vector3();
+  let previousSimTime = -1;
+  let nightStrength = 0;
+  let effectsPaused = true;
   let clock = 0;
   let raf = 0;
   let firstFrame = true;
@@ -160,6 +180,7 @@ export function createScene(container: HTMLElement): {
   const onResize = () => {
     if (!container.clientWidth || !container.clientHeight) return;
     renderer.setSize(container.clientWidth, container.clientHeight, false);
+    cinematic.resize(container.clientWidth, container.clientHeight);
     camera.aspect = container.clientWidth / container.clientHeight;
     camera.updateProjectionMatrix();
   };
@@ -169,11 +190,25 @@ export function createScene(container: HTMLElement): {
 
   const renderFrame = () => {
     if (disposed) return;
+    const frameStart = performance.now();
+    renderer.info.reset();
     const delta = Math.min(.06, clock ? performance.now() / 1000 - clock : .016);
     clock = performance.now() / 1000;
     crashEffect?.update(clock);
     if (latestState && vehicle && latestCampaign && latestMission && fire && bucketRig && world) {
       const t = latestState.timeSec;
+      const simulationDelta = previousSimTime < 0 ? 0 : Math.max(0, Math.min(.1, t - previousSimTime));
+      effectsPaused = simulationDelta === 0 || latestState.outcome !== 'none';
+      previousSimTime = t;
+      const daylight = evaluateTimeOfDay(latestMission, t);
+      nightStrength = daylight.nightStrength;
+      sun.color.setRGB(...daylight.sunColor);
+      sun.intensity = daylight.sunIntensity;
+      sun.castShadow = daylight.sunIntensity > .05;
+      ambient.color.setRGB(...daylight.ambientColor);
+      ambient.groundColor.copy(ambient.color).multiplyScalar(.35);
+      ambient.intensity = daylight.ambientIntensity;
+      cameraPrevious.copy(camera.position);
       const pos = latestState.position;
       aircraft.position.set(pos.x, pos.y, pos.z);
       aircraft.rotation.set(-latestState.pitch, latestState.heading, latestState.bank, 'YXZ');
@@ -181,18 +216,18 @@ export function createScene(container: HTMLElement): {
         (latestState as SimState & { failureCause?: string }).failureCause === 'collision';
       const slowRotor = latestState.phase === 'prepare' || latestState.phase === 'deck_rig' || latestState.phase === 'land';
       vehicle.rotors.forEach(r => {
-        if (!crashed) r.rotation.y += delta * (slowRotor ? 4 : 52) * Number(r.userData.spin || 1);
+        if (!crashed) r.rotation.y += simulationDelta * (slowRotor ? 4 : 52) * Number(r.userData.spin || 1);
         const disc = r.userData.disc as THREE.Mesh;
         const discMaterial = disc.material as THREE.MeshBasicMaterial;
         disc.visible = !crashed;
-        discMaterial.opacity = slowRotor ? .38 : .92;
+        discMaterial.opacity = slowRotor ? .25 : .64;
         (r.userData.blades as THREE.Mesh[]).forEach(blade => {
           const mat = blade.material as THREE.MeshStandardMaterial;
-          // At flight RPM, a distinct blade mesh freezes into long dark rods
-          // in screenshots. The swept disc carries the high-speed rotor cue.
-          blade.visible = !crashed && slowRotor;
-          mat.opacity = slowRotor ? 1 : 0;
-          mat.depthWrite = slowRotor;
+          // Keep the physical blades legible at flight RPM alongside the swept disc.
+          // Simulation-time rotation freezes both elements consistently when paused.
+          blade.visible = !crashed;
+          mat.opacity = 1;
+          mat.depthWrite = true;
         });
       });
       const heat = clamp((latestState.fireHeat + latestState.peatHeat * .35) / 100, 0, 1);
@@ -237,10 +272,21 @@ export function createScene(container: HTMLElement): {
       hudStyle?.setProperty('--aircraft-hud-y', `${(-hudAnchor.y * .5 + .5) * container.clientHeight + 12}px`);
       hudStyle?.setProperty('--aircraft-hud-visible', Math.abs(hudAnchor.x) < .95 && Math.abs(hudAnchor.y) < .92 && hudAnchor.z < 1 ? '1' : '0');
       sun.target.position.set(pos.x, pos.y - 6, pos.z);
-      sun.position.copy(sun.target.position).add(new THREE.Vector3(-104, 160, -52));
-      world.update(t, camera.position, latestState);
+      sun.position.set(...daylight.sunDirection).multiplyScalar(200).add(sun.target.position);
+      cameraVelocity.copy(camera.position).sub(cameraPrevious).multiplyScalar(simulationDelta > 0 ? 1 / simulationDelta : 0);
+      nightLighting?.update(latestState, nightStrength, daylight.sunIntensity);
+      proximityParticles?.update(latestState, camera);
+      world.update(t, camera.position, latestState, nightStrength);
     }
-    renderer.render(scene, camera);
+    if (latestState) cinematic.render(scene, camera, {
+      enabled: effectsEnabled, reducedMotion: reducedMotion.matches, paused: effectsPaused,
+      nightStrength, isPhone: container.clientWidth < 768,
+      aircraftPosition: latestState.position,
+      bucketPosition: latestState.bucketAttached ? latestState.bucket : undefined,
+      velocity: latestState.velocity, cameraVelocity,
+    });
+    else renderer.render(scene, camera);
+    lastFrameMs = performance.now() - frameStart;
     raf = requestAnimationFrame(renderFrame);
   };
   raf = requestAnimationFrame(renderFrame);
@@ -260,6 +306,9 @@ export function createScene(container: HTMLElement): {
     });
   };
   const clearCampaign = () => {
+    nightLighting?.dispose(); nightLighting = undefined;
+    proximityParticles?.dispose(); proximityParticles = undefined;
+    previousSimTime = -1;
     if (vehicle) {
       aircraft.remove(vehicle.root);
       disposeTree(vehicle.root);
@@ -285,6 +334,7 @@ export function createScene(container: HTMLElement): {
   };
 
   return {
+    diagnostics() { return { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, textures: renderer.info.memory.textures, geometries: renderer.info.memory.geometries, frameMs: lastFrameMs }; },
     update(state, campaign, mission) {
       const campaignChanged = !latestCampaign || latestCampaign.id !== campaign.id || !latestMission || latestMission.id !== mission.id;
       if (campaignChanged) {
@@ -295,6 +345,8 @@ export function createScene(container: HTMLElement): {
         createShip(scene, campaign, mission);
         vehicle = createAircraft(campaign);
         aircraft.add(vehicle.root);
+        nightLighting = createNightLighting(scene, aircraft, campaign, mission, world.coastalLightingAnchor);
+        proximityParticles = createProximityParticles(scene, campaign, mission);
         bucketRig = createBucketRig(scene);
         groundCrew = createGroundCrew(scene, campaign, mission);
         fire = createFire(scene, mission, world.terrainHeight);
@@ -319,6 +371,8 @@ export function createScene(container: HTMLElement): {
       cancelAnimationFrame(raf);
       resize.disconnect();
       clearCampaign();
+      unsubscribeEffects();
+      cinematic.dispose();
       renderer.dispose();
       renderer.domElement.remove();
       hudStyle?.setProperty('--aircraft-hud-visible', '0');

@@ -1,0 +1,372 @@
+/* Flight HUD refinements. Keep every rule inside the active flight layer. */
+.sf-game .sf-top-actions { gap: 4px; }
+.sf-game .sf-top-actions > .sf-icon-button {
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  gap: 0;
+  border: 0;
+  border-radius: 10px;
+  padding: 0;
+  background: transparent;
+  color: #f1eddd;
+}
+.sf-game .sf-top-actions > .sf-icon-button::before {
+  position: absolute;
+  z-index: -1;
+  inset: 6px;
+  border: 1px solid #e3e5d4a8;
+  border-radius: 8px;
+  background: #101b18e8;
+  box-shadow: 0 2px 7px #07110d40;
+  content: "";
+  transition: background-color .14s ease, border-color .14s ease, box-shadow .14s ease;
+}
+.sf-game .sf-top-actions > .sf-icon-button svg { width: 16px; height: 16px; }
+.sf-game .sf-top-actions > .sf-icon-button > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.sf-game .sf-top-actions > .sf-icon-button[aria-pressed="true"] { color: #f2cd76; }
+.sf-game .sf-top-actions > .sf-icon-button[aria-pressed="true"]::before { border-color: #e3b65f; }
+@media (hover: hover) and (pointer: fine) {
+  .sf-game .sf-top-actions > .sf-icon-button:hover::before {
+    border-color: #f2d58c;
+    background: #1b2a23f2;
+    box-shadow: 0 0 10px #e3b65f38;
+  }
+}
+.sf-game .sf-top-actions > .sf-icon-button:focus-visible::before {
+  border-color: #ffe09a;
+  box-shadow: 0 0 0 2px #101b18, 0 0 0 4px #e3b65f;
+}
+
+/* Labels come from data-tooltip and remain discoverable by keyboard focus. */
+.sf-game .sf-top-actions > .sf-icon-button[data-tooltip]::after {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 5px);
+  right: 0;
+  width: max-content;
+  max-width: min(220px, 70vw);
+  border: 1px solid #d7c58c;
+  border-radius: 4px;
+  padding: 5px 8px;
+  background: #101b18f5;
+  color: #fff3cf;
+  content: attr(data-tooltip);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  box-shadow: 0 4px 12px #06100dcc;
+}
+.sf-game .sf-top-actions > .sf-icon-button[data-tooltip]:hover::after,
+.sf-game .sf-top-actions > .sf-icon-button[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Objective and compass form one centered guidance stack. */
+.sf-game .sf-readouts {
+  top: calc(126px + env(safe-area-inset-top, 0px));
+  right: auto;
+  left: 50%;
+  width: min(540px, calc(100% - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 1px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.sf-game .sf-objective {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  border: 0;
+  padding: 0 8px 2px;
+  background: transparent;
+  color: #f6e5bd;
+  font-size: 11px;
+  text-align: center;
+  text-shadow: 0 1px 4px #07100ee8, 0 0 10px #e7bc693d;
+}
+.sf-game .sf-objective-dot { display: none; }
+.sf-game .sf-objective-copy {
+  width: 100%;
+  align-items: center;
+  gap: 2px;
+}
+.sf-game .sf-objective-kicker {
+  display: block;
+  color: #f0c872;
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: .17em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 4px #06100ef2, 0 0 10px #f1c36c70;
+}
+.sf-game .sf-objective-copy strong {
+  color: #fff0ce;
+  font-size: 20px;
+  font-weight: 720;
+  line-height: 1.12;
+  text-shadow: 0 2px 5px #06100ef2, 0 0 12px #e3b65f55;
+}
+.sf-game .sf-objective-copy > span:not(.sf-sr-only) {
+  position: relative;
+  display: block;
+  max-width: 100%;
+  margin-top: 2px;
+  padding: 4px 12px;
+  color: #fff2d6;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 4px #030908, 0 0 9px #e8bd6d72;
+  background:
+    linear-gradient(#f0ca7b, #f0ca7b) left top / 7px 1px,
+    linear-gradient(#f0ca7b, #f0ca7b) left top / 1px 5px,
+    linear-gradient(#f0ca7b, #f0ca7b) right top / 7px 1px,
+    linear-gradient(#f0ca7b, #f0ca7b) right top / 1px 5px,
+    linear-gradient(#f0ca7b, #f0ca7b) left bottom / 7px 1px,
+    linear-gradient(#f0ca7b, #f0ca7b) left bottom / 1px 5px,
+    linear-gradient(#f0ca7b, #f0ca7b) right bottom / 7px 1px,
+    linear-gradient(#f0ca7b, #f0ca7b) right bottom / 1px 5px;
+  background-repeat: no-repeat;
+}
+
+/* The compass now sits inside .sf-readouts, outside the former HUD parent. */
+.sf-game .sf-readouts .sf-compass {
+  position: relative;
+  inset: auto;
+  width: min(360px, 100%);
+  flex: 0 0 auto;
+  color: #e1efca;
+  font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  text-shadow: 0 1px 3px #06110e, 0 2px 7px #06110e;
+  transform: none;
+  pointer-events: none;
+}
+.sf-game .sf-readouts .sf-compass svg { display: block; width: 100%; overflow: hidden; filter: drop-shadow(0 1px 2px #06110e); }
+.sf-game .sf-readouts .sf-compass svg path { fill: none; stroke: currentColor; stroke-width: 1; }
+.sf-game .sf-readouts .sf-compass-readout { height: 25px; display: flex; align-items: baseline; justify-content: center; gap: 6px; }
+.sf-game .sf-readouts .sf-compass-readout span { font-size: 9px; letter-spacing: .08em; }
+.sf-game .sf-readouts .sf-compass-readout b { font: 600 22px/1 "Avenir Next", Avenir, sans-serif; letter-spacing: .05em; }
+.sf-game .sf-readouts .sf-compass-scale { height: 43px; }
+.sf-game .sf-readouts .sf-compass-scale text { fill: currentColor; font-size: 11px; font-weight: 600; }
+.sf-game .sf-readouts .sf-compass-scale .is-cardinal text { font-size: 13px; font-weight: 800; }
+.sf-game .sf-readouts .sf-compass-baseline { opacity: .4; }
+.sf-game .sf-readouts .sf-compass .sf-heading-caret { fill: #e1efca; stroke: none; }
+.sf-game .sf-readouts .sf-compass [data-bearing-bug] { color: #ffd380; }
+.sf-game .sf-readouts .sf-compass [data-bearing-bug] path { fill: #24312b; stroke-width: 1.5; }
+.sf-game .sf-readouts .sf-compass [data-bearing-bug].is-off-scale path { fill: #ffd380; }
+.sf-game .sf-readouts .sf-compass-target { display: flex; justify-content: center; align-items: center; gap: 7px; padding-top: 1px; color: #ffe0a3; font-size: 9px; }
+.sf-game .sf-readouts .sf-compass-target [data-guidance] { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-game .sf-readouts .sf-target-diamond { width: 6px; height: 6px; flex: 0 0 6px; border: 1px solid currentColor; transform: rotate(45deg); }
+
+/* Compact tapes keep the primary number legible without dominating the view. */
+.sf-game .sf-instrument { width: 72px; }
+.sf-game .sf-tape,
+.sf-game .sf-tape-scale { width: 72px; height: 150px; }
+.sf-game .sf-tape { margin-top: 6px; }
+.sf-game .sf-tape-window { width: 70px; height: 34px; }
+.sf-game .sf-tape-window b { padding-right: 10px; font-size: 20px; }
+.sf-game .sf-instrument--altitude .sf-tape-window b { padding-right: 0; padding-left: 10px; }
+
+/* Secondary mass and fuel figures recede slightly; status colors retain full strength. */
+.sf-game .sf-payload-instrument,
+.sf-game .sf-fuel-instrument { opacity: 1; }
+.sf-game .sf-payload-instrument .sf-instrument-title,
+.sf-game .sf-fuel-instrument .sf-instrument-title { font-size: 9px; }
+.sf-game .sf-payload-value { gap: 7px; font-size: 15px; }
+.sf-game .sf-payload-value svg { width: 13px; height: 17px; }
+.sf-game .sf-payload-position { font-size: 9px; }
+.sf-game .sf-fuel-instrument { width: 140px; }
+.sf-game .sf-fuel-heading b { font-size: 17px; }
+.sf-game .sf-fuel-heading b small { font-size: 8px; }
+.sf-game .sf-fuel-gauge { padding-block: 8px 6px; }
+.sf-game .sf-fuel-gauge i { height: 8px; }
+.sf-game .sf-fuel-return { font-size: 7px; }
+.sf-game .sf-fuel-return b { font-size: 10px; }
+.sf-game .sf-fuel-advisory { font-size: 9px; opacity: 1; }
+.sf-game .sf-fuel-instrument[data-fuel-status="caution"],
+.sf-game .sf-fuel-instrument[data-fuel-status="critical"] { opacity: 1; }
+
+/* Keep the control dials in place while their two-line labels sit above the rim. */
+.sf-game .sf-stick-wrap { position: relative; gap: 0; padding-top: 24px; }
+.sf-game .sf-stick-label {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  left: 50%;
+  width: clamp(83px, 27vw, 130px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  text-align: center;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.sf-game .sf-stick-label b { font-size: 8px; line-height: 1.05; }
+.sf-game .sf-stick-label span { color: #f1ead4; font-size: 8px; line-height: 1.05; }
+
+/* Move transient feedback below the guidance stack. */
+.sf-game .sf-message { top: 50%; }
+
+@media (max-width: 720px) {
+  .sf-game .sf-readouts { top: calc(122px + env(safe-area-inset-top, 0px)); width: calc(100% - 18px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)); }
+  .sf-game .sf-objective-copy strong { font-size: 16px; }
+  .sf-game .sf-objective-kicker { font-size: 7px; }
+  .sf-game .sf-objective-copy > span:not(.sf-sr-only) { font-size: 9px; }
+  .sf-game .sf-readouts .sf-compass { width: min(320px, 100%); }
+  .sf-game .sf-readouts .sf-compass-scale { height: 38px; }
+  .sf-game .sf-readouts .sf-compass-readout { height: 22px; }
+  .sf-game .sf-readouts .sf-compass-readout b { font-size: 20px; }
+  .sf-game .sf-instrument { width: 58px; }
+  .sf-game .sf-tape,
+  .sf-game .sf-tape-scale { width: 58px; height: 120px; }
+  .sf-game .sf-tape-window { width: 57px; height: 30px; }
+  .sf-game .sf-tape-window b { padding-right: 7px; font-size: 18px; }
+  .sf-game .sf-instrument--altitude .sf-tape-window b { padding-left: 7px; }
+  .sf-game .sf-payload-instrument { max-width: 43vw; }
+  .sf-game .sf-payload-value { font-size: 14px; }
+  .sf-game .sf-fuel-instrument { width: 118px; }
+  .sf-game .sf-fuel-heading b { font-size: 15px; }
+  .sf-game .sf-fuel-gauge { gap: 3px; padding-block: 6px 5px; }
+  .sf-game .sf-fuel-gauge i { height: 7px; }
+}
+
+@media (max-width: 520px) and (orientation: portrait) {
+  .sf-game .sf-readouts { top: calc(126px + env(safe-area-inset-top, 0px)); }
+  .sf-game .sf-readouts .sf-compass { width: min(286px, 100%); }
+}
+
+@media (max-width: 360px) {
+  .sf-game .sf-readouts { width: calc(100% - 14px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)); }
+  .sf-game .sf-objective-copy > span:not(.sf-sr-only) { max-width: 96%; }
+}
+
+@media (max-height: 670px) and (orientation: landscape) {
+  .sf-game .sf-readouts {
+    top: calc(55px + env(safe-area-inset-top, 0px));
+    width: min(430px, 48vw);
+    gap: 0;
+  }
+  .sf-game .sf-objective { padding: 0 5px 1px; }
+  .sf-game .sf-objective-copy { gap: 1px; }
+  .sf-game .sf-objective-copy strong { font-size: 16px; }
+  .sf-game .sf-objective-copy > span:not(.sf-sr-only) { margin-top: 1px; padding-block: 3px; font-size: 8px; }
+  .sf-game .sf-objective-kicker { font-size: 7px; }
+  .sf-game .sf-readouts .sf-compass { width: min(270px, 100%); }
+  .sf-game .sf-readouts .sf-compass-readout { height: 18px; }
+  .sf-game .sf-readouts .sf-compass-readout b { font-size: 18px; }
+  .sf-game .sf-readouts .sf-compass-scale { height: 26px; }
+  .sf-game .sf-readouts .sf-compass-scale text { font-size: 9px; }
+  .sf-game .sf-readouts .sf-compass-scale .is-cardinal text { font-size: 10px; }
+  .sf-game .sf-readouts .sf-compass-target { padding-top: 0; font-size: 8px; }
+  .sf-game .sf-stick-wrap { flex-direction: row; justify-content: center; gap: 10px; padding-top: 0; }
+  .sf-game .sf-stick-wrap--right { flex-direction: row-reverse; }
+  .sf-game .sf-stick-label {
+    position: static;
+    width: 54px;
+    flex: 0 0 54px;
+    align-items: flex-start;
+    text-align: left;
+    transform: none;
+  }
+  .sf-game .sf-stick-label b,
+  .sf-game .sf-stick-label span { font-size: 8px; }
+  .sf-game .sf-instrument { width: 58px; }
+  .sf-game .sf-tape,
+  .sf-game .sf-tape-scale { width: 58px; height: 108px; }
+  .sf-game .sf-tape-window { width: 57px; height: 28px; }
+  .sf-game .sf-tape-window b { font-size: 18px; }
+  .sf-game .sf-instrument-foot { display: none; }
+  .sf-game .sf-payload-instrument { left: 106px; bottom: calc(144px + env(safe-area-inset-bottom, 0px)); }
+  .sf-game .sf-fuel-instrument { right: 106px; bottom: calc(144px + env(safe-area-inset-bottom, 0px)); width: 122px; }
+  .sf-game .sf-payload-value,
+  .sf-game .sf-fuel-heading b { font-size: 13px; }
+  .sf-game .sf-payload-position { max-width: 160px; font-size: 8px; }
+  .sf-game .sf-fuel-gauge { padding-block: 4px; }
+  .sf-game .sf-fuel-gauge i { height: 6px; }
+  .sf-game .sf-message { top: 52%; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .sf-game .sf-top-actions > .sf-icon-button::before,
+  .sf-game .sf-top-actions > .sf-icon-button[data-tooltip]::after {
+    background: #10201d;
+  }
+  .sf-game .sf-objective { background: transparent; }
+}
+
+@media (prefers-contrast: more) {
+  .sf-game .sf-top-actions > .sf-icon-button::before { border: 2px solid #fff1c7; }
+  .sf-game .sf-objective-kicker,
+  .sf-game .sf-objective-copy strong,
+  .sf-game .sf-objective-copy > span:not(.sf-sr-only),
+  .sf-game .sf-readouts .sf-compass { color: #fff; }
+  .sf-game .sf-objective-copy > span:not(.sf-sr-only) { text-shadow: 0 1px 5px #000, 0 0 10px #000; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sf-game .sf-top-actions > .sf-icon-button::before,
+  .sf-game .sf-top-actions > .sf-icon-button[data-tooltip]::after { transition: none; }
+}
+
+.sf-game .sf-tape { background: linear-gradient(90deg, transparent, #0c211b2e); }
+.sf-game .sf-instrument--altitude .sf-tape { background: linear-gradient(90deg, #0c211b2e, transparent); }
+.sf-game .sf-tape-rail { opacity: .4; }
+.sf-game .sf-tape-scale { color: #c4d0b9; }
+@media (max-height:670px) and (orientation:landscape) {
+ .sf-game .sf-stick-wrap--right .sf-stick-label { align-items: flex-end; text-align: right; }
+}
+/* Short phones reserve separate bands for guidance, tapes, fuel and controls. */
+@media (max-width: 600px) and (max-height: 700px) and (orientation: portrait) {
+  .sf-game .sf-readouts .sf-compass { width: 190px; }
+  .sf-game .sf-readouts .sf-compass-scale { height: 28px; }
+  .sf-game .sf-readouts .sf-compass-readout { height: 21px; }
+  .sf-game .sf-instrument { top: 245px; }
+  .sf-game .sf-tape, .sf-game .sf-tape-scale { height: 76px; }
+  .sf-game .sf-instrument-foot { display: none; }
+  .sf-game .sf-fuel-instrument, .sf-game .sf-payload-instrument { bottom: calc(158px + env(safe-area-inset-bottom, 0px)); }
+}
+.sf-game .sf-objective-copy strong { color: #f6d48a; font-weight: 650; text-shadow: 0 1px 2px #06100e, 0 0 5px #06100e, 0 0 10px #e3b65f44; }
+.sf-game .sf-top-actions > .sf-icon-button:active::before { background: #344138; border-color: #e3b65f; }
+
+/* Keep heading guidance on the compass scale without a duplicate numeric readout. */
+.sf-game .sf-readouts .sf-compass-readout { display: none; }
+.sf-game .sf-flight-title {
+  border: 0;
+  padding: 5px 3px;
+  background: transparent;
+  text-shadow: 0 1px 2px #06100e, 0 0 4px #06100e;
+}
+.sf-game .sf-flight-title strong { font-size: 13px; font-weight: 600; color: #e3e8da; }
+.sf-game .sf-flight-title .sf-phase { font-size: 8px; color: #d7c38e; font-weight: 650; }
+.sf-game .sf-flight-title > span:last-child { color: #c6cec1; font-size: 9px; }

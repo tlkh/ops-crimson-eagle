@@ -4,8 +4,12 @@ import { createScene } from './render';
 import { createUI } from './ui';
 import { clearCheckpoint, loadCheckpoint, saveCheckpoint, writeProgress } from './persistence';
 import { GameAudio } from './audio';
+import { MissionRadioDirector } from './missionRadio';
+import type { MusicTrackId } from './music';
 import type { Campaign, CampaignId, FlightCommand, Mission, SimState } from './types';
 import './style.css';
+import './ui/menu.css';
+import './ui/flightRefinement.css';
 
 const root = document.getElementById('app');
 if (!root) throw new Error('Application root missing');
@@ -26,12 +30,38 @@ let lastSaveTime = 0;
 let lastPhase = '';
 let saving = Promise.resolve();
 const audio = new GameAudio();
+const radio = new MissionRadioDirector(({ id, priority }) => audio.playVoiceCue(id, priority));
+let voicePaused = false;
+let radioReminderOnResume = false;
+
+function syncVoicePause() {
+  const next = paused && state?.outcome === 'none';
+  if (next !== voicePaused) {
+    audio.setVoicePaused(next);
+    voicePaused = next;
+  }
+}
 
 const ui = createUI(root, {
-  onSelect: (campaignId, missionId) => { audio.unlock(); void selectMission(campaignId, missionId); },
-  onCommand: name => { if (name === 'resume' || name === 'drop') audio.unlock(); void act(name); },
+  onSelect: (campaignId, missionId) => { audio.setMusicTrack(missionId as MusicTrackId); audio.unlock(); return selectMission(campaignId, missionId).catch(error => { audio.setMusicTrack('menu'); throw error; }); },
+  onCommand: name => { audio.unlock(); void act(name); },
   onControls: partial => { command = { ...command, ...partial }; },
-}, campaigns);
+  onMusicToggle: enabled => audio.setMusicEnabled(enabled),
+  onVoiceToggle: enabled => {
+    audio.setVoiceEnabled(enabled);
+    if (!enabled) radioReminderOnResume = false;
+    if (enabled && state && campaign && mission && state.outcome === 'none') {
+      if (paused) radioReminderOnResume = true;
+      else radio.reset(state, campaign, mission);
+    }
+  },
+}, campaigns, audio.isMusicEnabled(), audio.isVoiceEnabled());
+
+root.addEventListener('click', event => {
+  if (event.target instanceof Element && event.target.closest('[data-music-toggle]')) return;
+  audio.unlock();
+}, { once: true, capture: true });
+window.addEventListener('keydown', () => audio.unlock(), { once: true });
 
 function queueSave() {
   if (!state) return;
@@ -50,30 +80,52 @@ async function selectMission(campaignId: CampaignId, missionId: string) {
   if (!nextCampaign || !nextMission) return;
   await saving.catch(() => undefined);
   const saved = await loadCheckpoint(campaignId);
+  const nextState = saved?.missionId === missionId && saved.phase !== 'debrief' && saved.phase !== 'failed'
+    ? saved : createSim(nextCampaign, nextMission);
+  const sceneHost = ui.getSceneHost();
+  const previousSceneNodes = new Set(sceneHost.childNodes);
+  let nextScene: ReturnType<typeof createScene>;
+  try {
+    nextScene = createScene(sceneHost);
+  } catch (error) {
+    for (const node of Array.from(sceneHost.childNodes)) {
+      if (!previousSceneNodes.has(node)) node.remove();
+    }
+    throw error;
+  }
+  scene?.dispose();
+  scene = nextScene;
   campaign = nextCampaign;
   mission = nextMission;
-  state = saved?.missionId === missionId && saved.phase !== 'debrief' && saved.phase !== 'failed'
-    ? saved : createSim(nextCampaign, nextMission);
-  scene?.dispose();
-  scene = createScene(ui.getSceneHost());
+  state = nextState;
   clearInput();
   paused = false;
   mapOpen = false;
   accumulator = 0;
   lastFrame = performance.now();
   lastPhase = state.phase;
+  audio.setVoiceMission(campaign.id);
+  syncVoicePause();
+  radio.reset(state, campaign, mission);
+  radioReminderOnResume = false;
   ui.showGame(state, campaign, mission, estimateLandingFuel(state, campaign, mission));
   ui.setPaused(false);
 }
 
 async function act(name: string) {
   if (name === 'menu') {
+    radio.clear();
+    radioReminderOnResume = false;
+    audio.setVoiceMission(null);
+    audio.setMusicTrack('menu');
+    audio.update(null, false);
     queueSave();
     await saving.catch(() => undefined);
     paused = true;
     clearInput();
     scene?.dispose(); scene = null;
     state = null; campaign = null; mission = null;
+    syncVoicePause();
     ui.showMenu();
     return;
   }
@@ -83,11 +135,24 @@ async function act(name: string) {
     await clearCheckpoint(campaign.id);
     state = createSim(campaign, mission);
     paused = false; mapOpen = false; clearInput(); accumulator = 0;
+    audio.setVoiceMission(campaign.id);
+    syncVoicePause();
+    radio.reset(state, campaign, mission);
+    radioReminderOnResume = false;
     ui.setPaused(false);
     return;
   }
-  if (name === 'map') { mapOpen = !mapOpen; paused = mapOpen; clearInput(); return; }
-  if (name === 'togglePause' || name === 'resume') { paused = name === 'resume' ? false : !paused; mapOpen = false; clearInput(); ui.setPaused(paused); if (paused) queueSave(); return; }
+  if (name === 'map') { mapOpen = !mapOpen; paused = mapOpen; clearInput(); syncVoicePause(); return; }
+  if (name === 'togglePause' || name === 'resume') {
+    paused = name === 'resume' ? false : !paused;
+    mapOpen = false;
+    clearInput();
+    syncVoicePause();
+    if (!paused && radioReminderOnResume) { radio.reset(state, campaign, mission); radioReminderOnResume = false; }
+    ui.setPaused(paused);
+    if (paused) queueSave();
+    return;
+  }
   if (paused) return;
   if (name === 'drop') command.drop = true;
   if (name === 'fetch') command.fetch = true;
@@ -143,6 +208,7 @@ function frame(now: number) {
       while (accumulator >= 1 / 60 && steps < 8) {
         const cmd = keyboardCommand();
         state = stepSim(state, cmd, campaign, mission);
+        radio.update(state, campaign, mission);
         command.drop = false; command.fetch = false; command.faceObjective = false;
         command.action = false; command.returnHome = false;
         accumulator -= 1 / 60;
@@ -159,17 +225,19 @@ function frame(now: number) {
     scene?.update(state, campaign, mission);
     ui.showGame(state, campaign, mission, estimateLandingFuel(state, campaign, mission));
     if (state.phase === 'debrief' || state.phase === 'failed') paused = true;
+    syncVoicePause();
     if (mapOpen) {
       const d = distance2D(state.position, { ...mission.fire, y: 0 });
       root?.setAttribute('data-map-distance', `${Math.round(d)} m`);
     }
   }
-  audio.update(state, paused);
+  audio.update(state, paused, mission);
   requestAnimationFrame(frame);
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && state) { paused = true; mapOpen = false; clearInput(); ui.setPaused(true); queueSave(); }
+  if (document.hidden && state) { paused = true; mapOpen = false; clearInput(); syncVoicePause(); ui.setPaused(true); queueSave(); }
+  audio.update(state, paused, mission);
 });
 window.addEventListener('pagehide', () => { if (state) queueSave(); });
 window.addEventListener('orientationchange', clearInput);
@@ -177,6 +245,7 @@ root.addEventListener('webglcontextlost', event => {
   event.preventDefault();
   paused = true;
   clearInput();
+  syncVoicePause();
   ui.setPaused(true);
   queueSave();
 });

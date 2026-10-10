@@ -1,0 +1,62 @@
+{
+  "generated": "2026-10-10",
+  "voice": {
+    "engine": "Kokoro-82M v1.0 via kokoro-onnx",
+    "voiceId": "af_heart",
+    "modelSource": "https://huggingface.co/hexgrad/Kokoro-82M",
+    "modelFile": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/kokoro-v1.0.fp16.onnx",
+    "voicesFile": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/voices-v1.0.bin",
+    "modelLicense": "Apache-2.0",
+    "runtimeSource": "https://github.com/thewh1teagle/kokoro-onnx",
+    "processing": "Mono voice; 300–3400 Hz radio EQ; moderate compression; quiet filtered static and short opening/closing squelch; MP3 game export."
+  },
+  "playback": {
+    "assetPattern": "public/voice/{id}.mp3",
+    "callsignByCampaign": {
+      "sg_fictional_2026_10": "callsign_singa",
+      "jp_ketapang_2026_09": "callsign_japan"
+    },
+    "transmission": "Play the campaign callsign, wait 130 ms, then play the mission cue."
+  },
+  "cues": [
+    { "id": "go_lake", "text": "Fly to the freshwater lake.", "group": "shared" },
+    { "id": "lake_descend", "text": "Descend toward twenty-five metres over the lake.", "group": "shared" },
+    { "id": "lake_climb", "text": "Climb toward twenty-five metres over the lake.", "group": "shared" },
+    { "id": "lake_slow", "text": "Slow down over the lake.", "group": "shared" },
+    { "id": "lake_align", "text": "Move closer to the lake marker.", "group": "shared" },
+    { "id": "fetch_water", "text": "Lower the bucket into the water and hold steady.", "group": "shared" },
+    { "id": "bucket_filling", "text": "Bucket filling. Maintain position.", "group": "shared" },
+    { "id": "bucket_full", "text": "Bucket full. Fly to the fire line.", "group": "shared" },
+    { "id": "load_limit", "text": "Maximum safe load reached. Fly to the fire.", "group": "shared" },
+    { "id": "go_fire", "text": "Fly to the fire line.", "group": "shared" },
+    { "id": "fire_altitude", "text": "Hold near fifty-five metres over the fire.", "group": "shared" },
+    { "id": "fire_slow", "text": "Slow down before releasing water.", "group": "shared" },
+    { "id": "fire_align", "text": "Move closer to the fire marker.", "group": "shared" },
+    { "id": "release_water", "text": "Release water over the fire.", "group": "shared" },
+    { "id": "water_released", "text": "Water released. Watch the impact.", "group": "shared" },
+    { "id": "fire_cooling", "text": "Water is cooling the fire.", "group": "shared" },
+    { "id": "another_load", "text": "Another load required. Return to the lake.", "group": "shared" },
+    { "id": "fire_secured", "text": "Fire line secured. Begin recovery.", "group": "shared" },
+    { "id": "landing_descend", "text": "Descend toward the marked landing point.", "group": "shared" },
+    { "id": "landing_slow", "text": "Slow down for landing.", "group": "shared" },
+    { "id": "landing_settle", "text": "Settle onto the marked landing point.", "group": "shared" },
+    { "id": "sg_attach_deck", "text": "Attach the bucket on the flight deck.", "group": "rsa_fictional" },
+    { "id": "sg_bucket_rigged", "text": "Bucket rigged. Lift clear and head to the lake.", "group": "rsa_fictional" },
+    { "id": "sg_return_ship", "text": "Return to the ship for recovery.", "group": "rsa_fictional" },
+    { "id": "sg_secure_bucket", "text": "Secure the bucket on the flight deck.", "group": "rsa_fictional" },
+    { "id": "jp_go_shore", "text": "Fly to the shore handling pad.", "group": "jsdf" },
+    { "id": "jp_attach_shore", "text": "Land at the shore pad and attach the bucket.", "group": "jsdf" },
+    { "id": "jp_sling_attached", "text": "Sling attached. Continue to the freshwater lake.", "group": "jsdf" },
+    { "id": "jp_return_shore", "text": "Return to the shore pad to remove the sling.", "group": "jsdf" },
+    { "id": "jp_remove_sling", "text": "Remove the sling at the shore pad.", "group": "jsdf" },
+    { "id": "jp_return_ship", "text": "Sling secured ashore. Return to J.S. Kunisaki.", "group": "jsdf" },
+    { "id": "return_fuel_low", "text": "Return fuel low.", "group": "alert" },
+    { "id": "fuel_critical", "text": "Fuel critical.", "group": "alert" },
+    { "id": "fuel_exhausted", "text": "Fuel exhausted. Land immediately.", "group": "alert" },
+    { "id": "aircraft_lost", "text": "Aircraft lost. Mission failed.", "group": "alert" },
+    { "id": "aircraft_damaged", "text": "Aircraft damaged beyond recovery.", "group": "alert" },
+    { "id": "sortie_complete", "text": "Sortie complete.", "group": "result" },
+    { "id": "callsign_singa", "text": "SINGA TWO ONE", "group": "callsign", "campaign": "sg_fictional_2026_10" },
+    { "id": "callsign_japan", "text": "JAPAN THREE ONE", "group": "callsign", "campaign": "jp_ketapang_2026_09" }
+  ]
+}

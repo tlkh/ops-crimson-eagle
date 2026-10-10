@@ -20,6 +20,7 @@ Use semantic names: `[MODEL_NAME]-[TASK_TITLE]-[OPTIONAL_ID]`, using underscores
 - Missions target about **300 simulated seconds**. This is a gameplay duration target, not a strict wall-clock timeout. Routes, distances, fuel consumption, and handling are deliberately compressed for short sessions.
 - The [original brief](Singapore_and_Japan_Chinook_Codex_Brief.md) is background. Follow current user requirements and implemented conventions; do not restore its longer travel distances or superseded controls.
 - Scenario coordinates are local gameplay metres, not latitude/longitude or surveyed geography. Aircraft variants and operational details may be representative presets; do not present authored missions as historical flight records.
+- Every mission has a start and end time of day. The sky, sun, illumination, and atmospheric transitions follow simulation time over the sortie; keep effects paused with gameplay and avoid treating authored lighting as local forecast data.
 - Generated campaign images are illustrations, not observations of actual fires. Preserve source URLs and generation provenance in [campaign-artwork.json](docs/campaign-artwork.json).
 
 ## Architecture and ownership
@@ -32,15 +33,16 @@ Use semantic names: `[MODEL_NAME]-[TASK_TITLE]-[OPTIONAL_ID]`, using underscores
 | `src/content/provenance.ts`, `validate.ts` | Scenario evidence and startup content validation |
 | `src/sim/index.ts` | Headless gameplay: flight, phases, fuel, objective actions, bucket, water, fire, outcomes |
 | `src/sim/bucket.ts` | Shared bucket geometry, surface heights, and water-contact helpers |
+| `src/sim/fireWork.ts`, `src/sim/shipLanding.ts` | Shared fire-observation thresholds and campaign-specific ship landing points |
 | `src/sim/collision.ts` | Terrain interpolation and registered world obstacle collision data |
 | `src/render/index.ts` | Three.js scene lifecycle, camera, and visual updates |
 | `src/render/aircraft.ts`, `ships.ts`, `world.ts` | Aircraft, ships, terrain, vegetation, settlements, and world collider registration |
 | `src/render/bucket.ts`, `groundCrew.ts` | Sling/load visuals and ground handling animation |
-| `src/render/water.ts`, `fire.ts`, `atmosphere.ts` | Water, fire, smoke, and atmospheric effects |
+| `src/render/water.ts`, `fire.ts`, `atmosphere.ts`, `timeOfDay.ts`, `nightLighting.ts`, `cinematicEffects.ts`, `proximityParticles.ts` | Water, fire, smoke, time-of-day lighting, and restrained cinematic/proximity effects |
 | `src/render/campaignFleet.ts` | Cached menu portraits rendered from the actual game aircraft and ships |
-| `src/ui/index.ts`, `flightHud.ts`, `src/style.css` | Campaign/mission screens, controls, cues, map, instruments, and responsive styling |
-| `src/audio.ts`, `src/persistence.ts` | Synthesized audio and browser save storage |
-| `public/` | Static artwork, app icons, manifest, and service worker |
+| `src/ui/index.ts`, `flightHud.ts`, `briefingMap.ts`, `menu.ts`, `src/style.css` | Campaign/mission screens, top-down mission map, controls, cues, instruments, and responsive styling |
+| `src/audio.ts`, `src/music.ts`, `src/missionRadio.ts`, `src/persistence.ts` | Flight sound, campaign music, radio cues, and browser save storage |
+| `public/` | Static artwork, generated campaign map, fonts, music/voice assets, app icons, manifest, and service worker |
 
 Keep gameplay authoritative in the simulation. Render code consumes state; it must not independently decide fill levels, water hits, collision outcomes, or mission progression. Keep the simulation usable without a browser or renderer.
 
@@ -50,7 +52,7 @@ Keep gameplay authoritative in the simulation. Render code consumes state; it mu
 
 - Fixed simulation step: **1/60 second**. The main loop bounds elapsed time, step count, and backlog. Preserve pause/terminal-state behavior and clear one-shot commands after consumption.
 - Y is up; the aircraft faces local **-Z** at heading zero. Ship length follows Z and beam follows X. Positive yaw turns left; HUD heading wraps the negated yaw into degrees. Do not assume gameplay X/Z are geographic compass axes.
-- `mission.ship` anchors ship geometry and map markers. Japan's actual spawn/landing target is **20 m along +Z** from that marker, matching its painted aft guide. Preserve the offset rather than moving the whole ship or mission marker.
+- `mission.ship` anchors ship geometry and map markers. The RSAF's actual spawn/landing target is **17 m along +Z** from that marker, matching Persistence's aftmost painted helicopter guide; Japan's target remains **20 m along +Z**, matching Kunisaki's painted aft guide. Use `shipLandingPoint` and `shipLandingLocalZ` from `src/sim/shipLanding.ts` so spawn, contact, guidance, rigging, rendering, and crew placement stay aligned. Preserve both offsets rather than moving a ship or mission marker.
 - Aircraft origin at a ship landing is Y=0; the visible deck surface is approximately **-2.525 m**, matching tyre clearance. Ground/shore landing heights must account for the gear instead of putting the aircraft origin on the surface.
 
 ### Bucket and water
@@ -62,6 +64,8 @@ Keep gameplay authoritative in the simulation. Render code consumes state; it mu
 - Ground clearance samples the bucket footprint against the applicable terrain, deck, apron, or pad. Maintain agreement between visible surfaces and simulation heights so neither bucket nor aircraft clips through them.
 - Water contact uses the bucket body bottom against the lake surface within its circular boundary. Filling also requires an attached bucket, an explicit fetching action, and sufficiently low horizontal bucket speed; load remains limited by maximum gross mass.
 - Released water travels as simulation packets and affects fire on impact. Keep the rendered stream, capacity bar, water mass, and fire response synchronized with that state.
+- After required drops, keep guidance on fire observation while released water is still in flight and while the fire can be secured (surface heat ≤30 for peat, ≤8 otherwise). Keep radio and HUD guidance aligned with these shared thresholds; once the objective is secured, advance to recovery without another lake trip.
+- Singapore deck recovery requires the full bucket footprint over the deck, the bucket clear of deck height, and the aircraft within 5 m of the marked landing point at low horizontal speed. The player carries the load over the deck and descends vertically. Sweep bucket motion against the hull before applying ground-height correction so a sea-level load cannot be dragged through the ship side. Japan retains its campaign-specific recovery flow.
 - Keep bucket rigging separate from the aircraft model. Preserve the simple bucket attachment without restoring the removed protruding rods.
 
 ### Guidance, input, and collisions
@@ -80,6 +84,8 @@ Keep gameplay authoritative in the simulation. Render code consumes state; it mu
 - Dispose replaced scenes, materials, geometry, textures, and listeners. Prefer reuse or instancing to creating objects every frame. Preserve WebGL context-loss recovery.
 - Check aircraft changes from the player's rear chase view as well as side view. Preserve the closed, tapered rear and the requested green rear finish; do not reintroduce open-ramp gaps or stray roof/gear shapes.
 - Ground-layer aerial perspective is patched per material in `src/render/heightFog.ts`, alongside the existing smoke/distance fog. Preserve existing shader hooks; calculate view-ray length per fragment so large water polygons remain clear nearby. Menu portraits do not use this layer.
+- Use simulation time for each mission's sky/sun transition and for night lighting; keep ambient illumination plausible for aircraft, ships, settlements, and fires. Proximity particles and cinematic effects remain subtle, pause with simulation, and respect reduced-motion preferences.
+- The briefing map is a top-down render of the actual gameplay map with labeled locations. Keep its coordinates aligned with mission geometry and landing offsets; avoid substituting a decorative or geographically precise map for the authored local gameplay coordinates.
 - Keep equipment names readable without truncation, reserve image dimensions before asynchronous loading, and retain clear next-step mission cues.
 - Respect reduced motion, maintain keyboard focus across menu transitions, and keep touch controls usable at phone sizes. Ground crew and gameplay effects should follow simulation time so they freeze when paused.
 - Audio unlocks on a user gesture; essential feedback must remain understandable when muted.

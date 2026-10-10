@@ -5,6 +5,7 @@ import type { ExtendedSimState } from './types';
 import { renderedTerrainHeight, setStructureColliders, setTreeColliders, terrainHeight } from './collision';
 import { BUCKET_BODY_HEIGHT_M, BUCKET_LIFT_OFFSET_M, SLING_LENGTH_M,
   LAKE_SURFACE_M, bucketMinimumRimHeight, bucketSurfaceHeight, getBucketHook, isBucketTouchingLake } from './bucket';
+import { shipLandingPoint } from './shipLanding';
 
 const noInput: FlightCommand = {
   yaw: 0,
@@ -35,6 +36,7 @@ function makeFixture(japan = false): { campaign: Campaign; mission: Mission } {
     peat: true,
     protectedLabel: 'Protected forest',
     durationTargetSec: 300,
+    timeOfDay: { startMinutes: 330, endMinutes: 480 },
   };
   const campaign: Campaign = {
     id: japan ? 'jp_ketapang_2026_09' : 'sg_fictional_2026_10',
@@ -85,7 +87,15 @@ describe('simulation mass and pickup rules', () => {
   it('stages the bucket beside the aircraft and lifts it only after the sling becomes taut', () => {
     const { campaign, mission } = makeFixture();
     const state = createSim(campaign, mission);
+    const landing = shipLandingPoint(campaign, mission);
+    expect(mission.ship).toMatchObject({ x: 0, z: 0 });
+    expect(landing.z).toBe(mission.ship.z + 17);
+    expect(state.position).toEqual(landing);
+    expect((state as ExtendedSimState).guidance.target).toEqual(landing);
     expect(state.bucket.x).toBe(mission.ship.x + 6);
+    expect(state.bucket.z).toBe(landing.z);
+    expect(state.bucket.y - BUCKET_BODY_HEIGHT_M).toBeCloseTo(
+      bucketSurfaceHeight(campaign, mission, state.bucket.x, state.bucket.z), 5);
     // The aircraft lands at origin y=0; its visible flight deck is y=-2.525.
     expect(state.bucket.y).toBeCloseTo(BUCKET_BODY_HEIGHT_M - 2.525);
     stepSim(state, { ...noInput, action: true }, campaign, mission);
@@ -166,7 +176,7 @@ describe('simulation mass and pickup rules', () => {
     state.bucketAttached = true;
     state.bucketLocation = 'aircraft';
     state.position.y = 18;
-    state.bucket = { x: mission.ship.x + 6, y: -4, z: mission.ship.z };
+    state.bucket = { x: mission.ship.x + 6, y: -4, z: shipLandingPoint(campaign, mission).z };
     stepSim(state, noInput, campaign, mission);
     expect(state.bucket.y - BUCKET_BODY_HEIGHT_M).toBeCloseTo(-2.525, 5);
 
@@ -382,7 +392,7 @@ describe('water impact and recovery flow', () => {
     state.velocity = { x: 7, y: 0, z: 0 };
     advance(state, { ...noInput,  }, campaign, mission, 0.5);
     expect(state.phase).toBe('return');
-    state.position = { x: mission.ship.x, y: 0, z: mission.ship.z };
+    state.position = shipLandingPoint(campaign, mission);
     state.velocity = { x: 0, y: 0, z: 0 };
     advance(state, noInput, campaign, mission, 1.5);
     expect(state.phase).toBe('deck_rig');
@@ -395,7 +405,8 @@ describe('water impact and recovery flow', () => {
     state.phase = 'return';
     state.bucketAttached = true;
     state.bucketLocation = 'aircraft';
-    state.position = { x: mission.ship.x + 18, y: 5, z: mission.ship.z };
+    const landing = shipLandingPoint(campaign, mission);
+    state.position = { x: landing.x + 2, y: 5, z: landing.z };
     expect(getObjectiveAction(state, campaign, mission)).toBe('deck-recover');
     stepSim(state, { ...noInput, action: true }, campaign, mission);
     advance(state, noInput, campaign, mission, 25);
@@ -441,6 +452,7 @@ describe('water impact and recovery flow', () => {
     advance(state, noInput, campaign, mission, 8);
     expect(state.position).toEqual(before);
     expect((state as ExtendedSimState).guidance.label).toBe(campaign.shipName);
+    expect((state as ExtendedSimState).guidance.target).toEqual(shipLandingPoint(campaign, mission));
   });
 
   it('completes the Singapore deck rig, work, and bucket recovery state path', () => {
@@ -474,7 +486,9 @@ describe('water impact and recovery flow', () => {
     expect(state.usefulLitres).toBeGreaterThan(0);
 
     state.phase = 'return';
-    state.position = { x: mission.ship.x, y: 0, z: mission.ship.z };
+    state.position = shipLandingPoint(campaign, mission);
+    state.bucket = { ...state.position, y: BUCKET_BODY_HEIGHT_M - 2.525 };
+    state.bucketVelocity = { x: 0, y: 0, z: 0 };
     state.velocity = { x: 0, y: 0, z: 0 };
     advance(state, noInput, campaign, mission, 1.5);
     expect(state.phase).toBe('deck_rig');
@@ -690,4 +704,24 @@ describe('aircraft collision and ground clearance', () => {
     expect(landing.outcome).toBe('none');
     expect(landing.position.y).toBeGreaterThanOrEqual(2.53);
   });
+});
+
+it('stops a sea-level bucket at the hull instead of snapping it up onto the deck', () => {
+  const { campaign, mission } = makeFixture();
+  const state = createSim(campaign, mission) as ExtendedSimState;
+  const edge = mission.ship.x + campaign.shipWidth / 2;
+  Object.assign(state, {
+    phase: 'return', bucketAttached: true, bucketLocation: 'aircraft',
+    position: { x: edge + 10, y: 10, z: mission.ship.z + 17 },
+    bucket: { x: edge + 1.3, y: -9 + BUCKET_BODY_HEIGHT_M, z: mission.ship.z + 17 },
+    bucketVelocity: { x: -40, y: 0, z: 0 },
+    precisionAction: 'deck-recover',
+  });
+  const oldBucket = { ...state.bucket };
+  stepSim(state, noInput, campaign, mission);
+  expect(state.phase).not.toBe('failed');
+  expect(state.bucket).toEqual(oldBucket);
+  expect(state.precisionAction).toBeNull();
+  expect(getObjectiveAction(state, campaign, mission)).not.toBe('deck-recover');
+  expect(state.message).toContain('Raise the bucket above the flight deck');
 });

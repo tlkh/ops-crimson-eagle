@@ -1,3 +1,6 @@
+import { shipLandingPoint } from './sim/shipLanding';
+import { bucketReadyForDeckRecovery } from './sim/bucket';
+import { shouldObserveFire } from './sim/fireWork';
 import { describe, expect, it } from 'vitest';
 import { getCampaign, getMission } from './content';
 import { createSim, distance2D, getObjectiveAction, stepSim } from './sim';
@@ -34,7 +37,7 @@ function flyGuidedTutorial(campaignId: CampaignId, missionId: string) {
   const mission = getMission(campaignId, missionId)!;
   const state = createSim(campaign, mission) as ExtendedSimState;
   const japanese = campaignId === 'jp_ketapang_2026_09';
-  const deck = { ...mission.ship, z: mission.ship.z + (japanese ? 20 : 0) };
+  const deck = { ...mission.ship, ...shipLandingPoint(campaign, mission) };
   const shore = mission.shore ?? mission.ship;
   let lastAction: string | null = null;
   let maxTick = 60 * 400;
@@ -42,7 +45,7 @@ function flyGuidedTutorial(campaignId: CampaignId, missionId: string) {
     const available = getObjectiveAction(state, campaign, mission);
     let cmd = { ...idle };
     if (state.precisionAction || state.fetching || state.rigProgress > 0 || state.dumping ||
-      (state.phase === 'work' && state.dropsCompleted >= mission.requiredDrops && state.fireHeat <= 30)) {
+      shouldObserveFire(state, mission)) {
       // Allow local correction, rigging, filling and dumping to finish.
     } else if (available && available !== lastAction) {
       if (available === 'fetch') cmd.fetch = true;
@@ -62,7 +65,9 @@ function flyGuidedTutorial(campaignId: CampaignId, missionId: string) {
       // Start the lake descent before arriving at its shore. The lake and its
       // clear margin give the pilot room to lower a suspended load safely.
       const descentRange = destination === mission.lake ? mission.lake.radius + 160 : 100;
-      const approachAltitude = distance <= descentRange ? targetAltitude : Math.max(targetAltitude, 60);
+      const deckApproach = destination === deck && !japanese && state.bucketAttached;
+      const readyToDescend = !deckApproach || (distance <= 4 && bucketReadyForDeckRecovery(state, campaign, mission));
+      const approachAltitude = distance <= descentRange && readyToDescend ? targetAltitude : Math.max(targetAltitude, 60);
       cmd = flyTo(state, destination, approachAltitude,
         state.bucketAttached ? 48 : 55);
       if (!available) lastAction = null;

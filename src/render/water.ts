@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import type { Campaign, Mission, SimState } from '../types';
+import { evaluateTimeOfDay } from './timeOfDay';
 
 // One small planar reflection is refreshed at a time. The water continues to
 // animate between captures; the original mean surface remains the contact plane.
@@ -25,6 +26,12 @@ const fragmentShader = /* glsl */`
   uniform float time;
   uniform float kind;
   uniform float reflectionReady;
+  uniform vec3 daylightSun;
+  uniform vec3 daylightSunColor;
+  uniform vec3 daylightZenith;
+  uniform vec3 daylightHorizon;
+  uniform float daylightStrength;
+  uniform float daylightAmbient;
   uniform vec2 wind;
   uniform vec4 ship;
   uniform float shipLength;
@@ -119,7 +126,7 @@ const fragmentShader = /* glsl */`
     float facing = max(.0,dot(view,normal));
     float fresnel = .07+.70*pow(1.0-facing,4.0);
     vec3 reflectedDirection = reflect(-view,normal);
-    vec3 sky = mix(vec3(.52,.63,.65),vec3(.25,.45,.57),pow(max(0.0,reflectedDirection.y),.5));
+    vec3 sky = mix(daylightHorizon,daylightZenith,pow(max(0.0,reflectedDirection.y),.5));
     vec2 projected = mirrorUv.xy/max(mirrorUv.w,.001);
     vec2 distortion = slope * .014 * (1.0-smoothstep(500.0,3500.0,distanceToEye));
     vec2 reflectionUv = clamp(projected+distortion,vec2(.002),vec2(.998));
@@ -127,26 +134,34 @@ const fragmentShader = /* glsl */`
     vec3 reflection = mix(sky,texture2D(tDiffuse,reflectionUv).rgb,reflectionReady*validUv);
     vec3 base = color*(.83+grain*.26);
     base = mix(base,vec3(.12,.23,.19),margin*.5);
+    float shallow = sea * (1.0-smoothstep(0.0,100.0,max(0.0,beachDistance)));
+    vec3 sediment = mix(vec3(.18,.19,.12), vec3(.28,.27,.18),noise(p*.085));
+    base = mix(base,sediment,shallow*.56) * daylightAmbient;
     vec3 result = mix(base,reflection,fresnel);
-    vec3 sun = normalize(vec3(-.52,.8,-.26));
+    vec3 sun = daylightSun;
     vec3 halfVector = normalize(sun+view);
     float glint = pow(max(0.0,dot(normal,halfVector)),180.0);
-    result += vec3(1.0,.88,.65)*glint*.75;
-    result = mix(result,vec3(.60,.70,.68),clamp(foam+aeration*.24,0.0,.66));
-    result += vec3(.08,.11,.105)*bucketRipple.z*exp(-pow((bucketDistance-2.0)/1.4,2.0));
-    gl_FragColor = vec4(result,1.0);
+    result += daylightSunColor*glint*.75*daylightStrength;
+    result = mix(result,vec3(.60,.70,.68)*daylightAmbient,clamp(foam+aeration*.24,0.0,.66));
+    result += vec3(.08,.11,.105)*daylightAmbient*bucketRipple.z*exp(-pow((bucketDistance-2.0)/1.4,2.0));
+    float shoreTransparency = sea * (1.0-smoothstep(0.0,72.0,max(0.0,beachDistance)));
+    gl_FragColor = vec4(result,1.0-shoreTransparency*.28);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
     #include <fog_fragment>
   }
 `;
 
-export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mission) {
+export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mission, options: { reflections?: boolean } = {}) {
+  const reflections = options.reflections ?? true;
   const jp = campaign.id === 'jp_ketapang_2026_09';
   const target = mission.shore ?? mission.lake;
   const route = new THREE.Vector2(target.x-mission.ship.x,target.z-mission.ship.z);
   const routeLength = route.length(); route.normalize();
   const shared = {
+    daylightSun: { value: new THREE.Vector3() }, daylightSunColor: { value: new THREE.Color() },
+    daylightZenith: { value: new THREE.Color() }, daylightHorizon: { value: new THREE.Color() },
+    daylightStrength: { value: 1 }, daylightAmbient: { value: 1 },
     time: { value: 0 }, wind: { value: new THREE.Vector2(mission.wind.x,mission.wind.z) },
     ship: { value: new THREE.Vector4(mission.ship.x,mission.ship.z,campaign.shipWidth,jp?40:35) },
     shipLength: { value: campaign.shipLength },
@@ -175,13 +190,14 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
     mesh.rotation.x = -Math.PI/2; mesh.position.copy(position);
     const material = mesh.material as THREE.ShaderMaterial;
     material.fog = true;
+    material.transparent = kind === 0;
     // Reflector clones uniforms; reconnect only the animated environmental values.
     Object.assign(material.uniforms,shared);
     const reflectionPass = mesh.onBeforeRender;
     const entry = {mesh,kind,captured:false,lastCapture:-Infinity};
     surfaces.push(entry);
     mesh.onBeforeRender = function(renderer,renderScene,camera,geometry,material,group) {
-      if (reflecting || entry.kind!==activeKind) return;
+      if (!reflections || reflecting || entry.kind!==activeKind) return;
       const now = performance.now();
       if (entry.captured && now-entry.lastCapture<80) return;
       reflecting = true;
@@ -206,6 +222,13 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
     surface, riverMaterial,
     update(time: number, state?: SimState) {
       shared.time.value=time;
+      const daylight = evaluateTimeOfDay(mission, time);
+      shared.daylightSun.value.set(...daylight.sunDirection);
+      shared.daylightSunColor.value.setRGB(...daylight.sunColor);
+      shared.daylightZenith.value.setRGB(...daylight.skyZenith);
+      shared.daylightHorizon.value.setRGB(...daylight.skyHorizon);
+      shared.daylightStrength.value = daylight.sunIntensity / 3.5;
+      shared.daylightAmbient.value = 1 - daylight.nightStrength * .92;
       if (!state) return;
       const p=state.position;
       const overLake=Math.hypot(p.x-mission.lake.x,p.z-mission.lake.z)<mission.lake.radius+100;

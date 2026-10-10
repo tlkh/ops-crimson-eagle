@@ -1,8 +1,10 @@
+import { shouldObserveFire } from './fireWork';
 import type { Campaign, FlightCommand, Mission, SimState, Vec3 } from '../types';
 import type { ExtendedSimState } from './types';
 import { nearbyTrees, renderedTerrainHeight, structureColliders, terrainHeight } from './collision';
 import { BUCKET_BODY_HEIGHT_M, BUCKET_FLOAT_RIM_M, BUCKET_HOOK_OFFSET_M, BUCKET_LIFT_OFFSET_M,
-  SLING_LENGTH_M, bucketMinimumRimHeight, bucketSurfaceHeight, getBucketHook, isBucketTouchingLake } from './bucket';
+  SLING_LENGTH_M, bucketReadyForDeckRecovery, bucketCrossesShipSide, bucketMinimumRimHeight, bucketSurfaceHeight, getBucketHook, isBucketTouchingLake } from './bucket';
+import { shipLandingLocalZ, shipLandingPoint } from './shipLanding';
 
 export type { ExtendedSimState, WaterPacket } from './types';
 
@@ -13,10 +15,6 @@ const FILL_RATE_L_PER_SEC = 750;
 const DUMP_RATE_L_PER_SEC = 1_250;
 const DECK_RIG_DURATION_SEC = 6;
 const SHORE_RIG_DURATION_SEC = 8;
-// Kunisaki's stern flight-deck guide is authored at local z=20 in ships.ts.
-// Keep the mission ship origin at z=0 for route/map layout, while using the
-// painted aft landing spot for aircraft spawn, contact, and recovery guidance.
-const JAPAN_FLIGHT_DECK_LANDING_Z_OFFSET_M = 20;
 const WATER_PACKET_INTERVAL_SEC = 0.1;
 const MAX_BANK = 25 * Math.PI / 180;
 const MAX_PITCH = 25 * Math.PI / 180;
@@ -49,14 +47,6 @@ export function grossMass(state: SimState, campaign: Campaign): number {
 
 function isJapan(campaign: Campaign): boolean {
   return campaign.id === 'jp_ketapang_2026_09';
-}
-
-function shipLandingPoint(campaign: Campaign, mission: Mission): Vec3 {
-  return {
-    x: mission.ship.x,
-    y: 0,
-    z: mission.ship.z + (isJapan(campaign) ? JAPAN_FLIGHT_DECK_LANDING_Z_OFFSET_M : 0),
-  };
 }
 
 function handlingPoint(campaign: Campaign, mission: Mission): Vec3 {
@@ -153,7 +143,8 @@ function shipContact(state: SimState, campaign: Campaign, mission: Mission): boo
   const halfLength = clamp(campaign.shipLength * 0.22, 18, 42);
   const halfWidth = Math.max(7, campaign.shipWidth / 2 - 1.4);
   // Ship geometry runs lengthwise along world Z, with its beam along X.
-  return dx <= halfWidth && dz <= halfLength && state.position.y <= 2.2 &&
+  return (isJapan(campaign) || !state.bucketAttached || (bucketReadyForDeckRecovery(state, campaign, mission) && Math.hypot(dx, dz) <= 5)) &&
+    dx <= halfWidth && dz <= halfLength && state.position.y <= 2.2 &&
     Math.hypot(state.velocity.x, state.velocity.z) <= 2.5 && Math.abs(state.velocity.y) <= 1.2;
 }
 
@@ -315,6 +306,7 @@ function updateBucket(
   mission: Mission,
   hookVelocity: Vec3,
   dt: number,
+  priorAircraftPosition: Vec3,
 ): void {
   if (!state.bucketAttached || state.bucketLocation !== 'aircraft') {
     // Retain the place where crews set it down. Resetting x/z to a marker
@@ -339,8 +331,20 @@ function updateBucket(
   state.bucket.y += velocity.y * dt;
   state.bucket.z += velocity.z * dt;
 
+  const blockHullCrossing = () => {
+    if (!bucketCrossesShipSide(old, state.bucket, campaign, mission)) return false;
+    state.bucket = { ...old };
+    state.bucketVelocity = { x: 0, y: 0, z: 0 };
+    state.position.x = priorAircraftPosition.x;
+    state.position.z = priorAircraftPosition.z;
+    state.velocity.x = 0; state.velocity.z = 0;
+    state.precisionAction = null;
+    setMessage(state, 'Raise the bucket above the flight deck before moving aboard.');
+    return true;
+  };
   const hook = getBucketHook(state);
   for (let iteration = 0; iteration < 3; iteration++) {
+    if (blockHullCrossing()) return;
     const floor = bucketMinimumRimHeight(campaign, mission, state.bucket.x, state.bucket.z);
     if (state.bucket.y < floor) state.bucket.y = floor;
     const dx = state.bucket.x - hook.x;
@@ -353,6 +357,7 @@ function updateBucket(
     state.bucket.y = hook.y + dy * ratio - BUCKET_LIFT_OFFSET_M;
     state.bucket.z = hook.z + dz * ratio;
   }
+  if (blockHullCrossing()) return;
   // The contact plane wins if the aircraft hook is still below a grounded
   // bucket. As the aircraft lifts, the slack is paid out before the load rises.
   const floor = bucketMinimumRimHeight(campaign, mission, state.bucket.x, state.bucket.z);
@@ -570,6 +575,7 @@ function navigationTarget(state: ExtendedSimState, campaign: Campaign, mission: 
   if (state.phase === 'depart') return isJapan(campaign)
     ? { target: shore, label: 'Shore handling site' }
     : { target: lake, label: 'Freshwater lake' };
+  if (shouldObserveFire(state, mission)) return { target: fire, label: 'Observe fire' };
   if (state.phase === 'transit') return { target: lake, label: 'Freshwater lake' };
   if (state.phase === 'work') {
     return state.waterLitres >= WATER_CAPACITY_L * 0.9 || state.dumping
@@ -595,10 +601,11 @@ export function getObjectiveAction(state: SimState, campaign: Campaign, mission:
     state.position.y <= 9 && speed <= 10 && Math.abs(state.velocity.y) <= 4;
   const shoreNear = shoreDistance <= 35 && state.position.y <= 10 && speed <= 10 && Math.abs(state.velocity.y) <= 4;
   if (state.phase === 'deck_rig' && !state.bucketAttached && deckNear) return 'deck-rig';
-  if (!isJapan(campaign) && ['return', 'land', 'deck_rig'].includes(state.phase) && state.bucketAttached && deckNear) return 'deck-recover';
+  if (!isJapan(campaign) && ['return', 'land', 'deck_rig'].includes(state.phase) && state.bucketAttached && deckNear &&
+    bucketReadyForDeckRecovery(state, campaign, mission) && distance2D(state.position, deck) <= 5 && speed <= 2.5) return 'deck-recover';
   if (isJapan(campaign) && ['depart', 'shore_rig'].includes(state.phase) && !state.bucketAttached && shoreNear) return 'attach';
   if (isJapan(campaign) && ['return', 'shore_unrig'].includes(state.phase) && state.bucketAttached && shoreNear) return 'unrig';
-  if (!state.bucketAttached || (state as ExtendedSimState).dumping) return null;
+  if (!state.bucketAttached || (state as ExtendedSimState).dumping || shouldObserveFire(state, mission)) return null;
   const lakeDistance = distance2D(state.position, mission.lake);
   const fireDistance = distance2D(state.position, mission.fire);
   if (state.waterLitres > 1 && ['transit', 'work'].includes(state.phase) &&
@@ -663,6 +670,10 @@ function withLocalGuidance(
 
   if (state.precisionAction) {
     const action = state.precisionAction;
+    if (action === 'deck-recover' && (available !== 'deck-recover' || !bucketReadyForDeckRecovery(state, campaign, mission))) {
+      state.precisionAction = null;
+      return { ...command, action: false };
+    }
     // Once the bucket reaches the lake, let it settle and fill in place. The
     // normal fetch target is for the approach; holding the aircraft at that
     // target after contact could lift a slack sling back out of the water.
@@ -749,7 +760,10 @@ function updateWaterAndFire(state: ExtendedSimState, campaign: Campaign, mission
     }
   }
 
-  if (state.fireState === 'burning' || state.fireState === 'surface_suppressed') {
+  // Once suppression allows crews to finish, do not rekindle across that
+  // threshold before their first work tick. Guidance uses these same limits.
+  if ((state.fireState === 'burning' || state.fireState === 'surface_suppressed') &&
+    state.fireHeat > (mission.peat ? 30 : 8)) {
     const rekindle = state.fireHeat < 8 ? 0.025 : 0.12;
     state.fireHeat = clamp(state.fireHeat + rekindle * (0.85 + rand(state) * 0.3) * dt, 0, 100);
   }
@@ -840,8 +854,8 @@ function shipCollision(state: ExtendedSimState, campaign: Campaign, mission: Mis
   const length = campaign.shipLength;
   const beam = campaign.shipWidth;
   const speed = Math.hypot(state.velocity.x, state.velocity.z);
-  const safeDeck = Math.abs(x) <= Math.max(7, beam / 2 - 1.4) &&
-    Math.abs(z - (japanese ? JAPAN_FLIGHT_DECK_LANDING_Z_OFFSET_M : 0)) <= clamp(length * .22, 18, 42) &&
+  const safeDeck = (japanese || !state.bucketAttached || bucketReadyForDeckRecovery(state, campaign, mission)) && Math.abs(x) <= Math.max(7, beam / 2 - 1.4) &&
+    Math.abs(z - shipLandingLocalZ(campaign)) <= clamp(length * .22, 18, 42) &&
     speed <= 3.5 && Math.abs(state.velocity.y) <= 3;
 
   // Match the separate bridge, boat-bay, funnel and mast envelopes in ships.ts.
@@ -989,7 +1003,7 @@ function updateFillAndDump(state: ExtendedSimState, command: FlightCommand, miss
     state.dumpStartedWithLitres = state.waterLitres;
     state.dropPacketTime = 0;
     state.dropPacketLitres = 0;
-    setMessage(state, 'Water released. Watch the impact, then return to the lake for another load.', 3.5);
+    setMessage(state, 'Water released. Observe the impact and assess the fire.', 3.5);
   }
 
   if (state.dumping) {
@@ -1079,7 +1093,7 @@ export function stepSim(
     y: (currentHook.y - previousHook.y) / step,
     z: (currentHook.z - previousHook.z) / step,
   };
-  updateBucket(state, campaign, mission, hookVelocity, step);
+  updateBucket(state, campaign, mission, hookVelocity, step, priorPosition);
 
   // Continuous fuel use also covers the engine-running deck/shore handling time.
   state.fuelKg = Math.max(0, state.fuelKg - effectiveBurnKgPerMin(state) * step / 60);

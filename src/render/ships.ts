@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Campaign, Mission } from '../types';
+import { shipLandingLocalZ } from '../sim/shipLanding';
 
-// Bow is -Z; the mission marker is the operational aft landing spot, not amidships.
+// Bow is -Z; the ship marker anchors geometry, with landing guides offset along +Z.
 // Dimensions are metres. See docs/ship-geometry-references.md for the evidence limits.
 // Flight physics uses y=0 at the aircraft's origin. Its four tyres reach
 // y≈-2.52, so the visible deck must meet those tyres rather than the fuselage.
@@ -192,6 +193,7 @@ function batch(g: THREE.Group) {
 export function createShip(scene: THREE.Scene, campaign: Campaign, mission: Mission) {
   const g=new THREE.Group(); g.name=campaign.shipName;
   const japanese=campaign.id==='jp_ketapang_2026_09', L=campaign.shipLength, B=campaign.shipWidth;
+  const aftLandingZ=shipLandingLocalZ(campaign);
   const stern=japanese?40:35, s=(fraction:number)=>stern-L+fraction*L;
   const steel=mat(japanese?'#858d8e':'#626d70',.18,.9), light=mat('#aab1af',.12,.77), dark=mat('#273239',.08,.86);
   const deck=mat('#ffffff',.04,.96), white=mat('#d8dcd5',.02,.9), black=mat('#22282b',.08,.92), red=mat('#754e44',.08,.92);
@@ -249,7 +251,7 @@ export function createShip(scene: THREE.Scene, campaign: Campaign, mission: Miss
     ciws(g,ix,s(.325),DECK+1.8,steel,dark,white);ciws(g,ix,s(.59),DECK+6.3,steel,dark,white);
     for(const side of [-1,1]) {box(g,.07,4.9,7.5,side*B*.501,-5.5,s(.47),dark);box(g,.09,4.5,7.1,side*B*.506,-5.5,s(.47),steel);}
     // White landing guides on the aft flight deck: hollow outlines, never solid discs.
-    for(const z of [-12,20]) {
+    for(const z of [-12,aftLandingZ]) {
       outline(g,0,z,B*.78,22,white);
       box(g,B*.76,.035,.18,0,DECK+.09,z,white);
       for(const side of [-1,1]) { const a=new THREE.Vector3(side*B*.37,DECK+.1,z-10),b=new THREE.Vector3(0,DECK+.1,z);rod(g,a,b,.07,white); }
@@ -306,7 +308,7 @@ export function createShip(scene: THREE.Scene, campaign: Campaign, mission: Miss
     // Bow 76mm mount, explicitly identified by the RSN equipment page.
     house(g,3.1,2.0,3.3,0,DECK+1.5,s(.16),steel,.55,0);
     rod(g,new THREE.Vector3(0,DECK+2.9,s(.16)-1),new THREE.Vector3(0,DECK+3.3,s(.16)-6.4),.15,dark);
-    for(const z of [-16,17]) {ring(g,0,z,5.5,white);box(g,B*.82,.035,.16,0,DECK+.08,z,white);}
+    for(const z of [-16,aftLandingZ]) {ring(g,0,z,5.5,white);box(g,B*.82,.035,.16,0,DECK+.08,z,white);}
     for(const side of [-1,1])box(g,.2,.035,65,side*B*.44,DECK+.08,0,white);
     box(g,.2,.035,65,0,DECK+.08,0,white);
     // Parallel ASIST tracks and the actual 209 stern marking are visible in 2022 photos.

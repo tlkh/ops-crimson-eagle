@@ -1,0 +1,135 @@
+{
+  "retrieved": "2026-10-10",
+  "tracks": {
+    "menu": {
+      "title": "Hymn to the Dawn",
+      "artist": "Scott Buckley",
+      "sourceUrl": "https://www.scottbuckley.com.au/library/hymn-to-the-dawn/",
+      "downloadUrl": "https://www.scottbuckley.com.au/library/wp-content/uploads/2022/11/HymnToTheDawn.mp3",
+      "license": "CC BY 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+      "file": "menu.mp3",
+      "changes": "Transcoded to MP3 and loudness normalized"
+    },
+    "SG-01": {
+      "title": "Sunset Walk",
+      "artist": "KiluaBoy",
+      "sourceUrl": "https://opengameart.org/content/sunset-walk-ambient-quiet-sweet-loop",
+      "downloadUrl": "https://opengameart.org/sites/default/files/SunsetWalk.ogg",
+      "license": "CC0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "file": "sg-01.mp3",
+      "changes": "Transcoded to MP3 and loudness normalized"
+    },
+    "SG-02": {
+      "title": "Urgent",
+      "artist": "SRG774",
+      "sourceUrl": "https://opengameart.org/content/dark-sci-fi-audio-pack",
+      "downloadUrl": "https://opengameart.org/sites/default/files/urgent_0.mp3",
+      "license": "CC0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "file": "sg-02.mp3",
+      "changes": "Transcoded to MP3 and loudness normalized"
+    },
+    "SG-03": {
+      "title": "Global Resonance",
+      "artist": "Eponasoft",
+      "sourceUrl": "https://opengameart.org/content/global-resonance",
+      "downloadUrl": "https://opengameart.org/sites/default/files/global_resonance.ogg",
+      "license": "CC0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "file": "sg-03.mp3",
+      "changes": "Transcoded to MP3 and loudness normalized"
+    },
+    "SG-04": {
+      "title": "Airy",
+      "artist": "SRG774",
+      "sourceUrl": "https://opengameart.org/content/dark-sci-fi-audio-pack",
+      "downloadUrl": "https://opengameart.org/sites/default/files/airy_0.mp3",
+      "license": "CC0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "file": "sg-04.mp3",
+      "changes": "Transcoded to MP3 and loudness normalized"
+    },
+    "SG-05": {
+      "title": "Searching",
+      "artist": "yd",
+      "sourceUrl": "https://opengameart.org/content/searching",
+      "downloadUrl": "https://opengameart.org/sites/default/files/Searching.ogg",
+      "license": "CC0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "file": "sg-05.mp3",
+      "changes": "Transcoded to MP3 and loudness normalized"
+    },
+    "SG-06": {
+      "title": "A Kind Of Hope",
+      "artist": "Scott Buckley",
+      "sourceUrl": "https://www.scottbuckley.com.au/library/a-kind-of-hope/",
+      "downloadUrl": "https://www.scottbuckley.com.au/library/wp-content/uploads/2022/10/AKindOfHope.mp3",
+      "license": "CC BY 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+      "file": "sg-06.mp3",
+      "changes": "Transcoded to MP3 and loudness normalized"
+    },
+    "JP-01": {
+      "title": "Meadow Thoughts",
+      "artist": "Écrivain",
+      "sourceUrl": "https://opengameart.org/content/meadow-thoughts",
+      "downloadUrl": "https://opengameart.org/sites/default/files/Meadow%20Thoughts.ogg",
+      "license": "CC0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "file": "jp-01.mp3",
+      "changes": "Transcoded to MP3 and loudness normalized"
+    },
+    "JP-02": {
+      "title": "Covert Operations",
+      "artist": "artisticdude",
+      "sourceUrl": "https://opengameart.org/content/covert-operations",
+      "downloadUrl": "https://opengameart.org/sites/default/files/covert_operations.mp3",
+      "license": "CC0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "file": "jp-02.mp3",
+      "changes": "Transcoded to MP3 and loudness normalized"
+    },
+    "JP-03": {
+      "title": "Calm Track",
+      "artist": "pmiller",
+      "sourceUrl": "https://opengameart.org/content/calm-track",
+      "downloadUrl": "https://opengameart.org/sites/default/files/calm_track-loop.ogg",
+      "license": "CC0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "file": "jp-03.mp3",
+      "changes": "Transcoded to MP3 and loudness normalized"
+    },
+    "JP-04": {
+      "title": "Pulse",
+      "artist": "SRG774",
+      "sourceUrl": "https://opengameart.org/content/dark-sci-fi-audio-pack",
+      "downloadUrl": "https://opengameart.org/sites/default/files/pulse_0.mp3",
+      "license": "CC0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "file": "jp-04.mp3",
+      "changes": "Transcoded to MP3 and loudness normalized"
+    },
+    "JP-05": {
+      "title": "Near and Far",
+      "artist": "Joth",
+      "sourceUrl": "https://opengameart.org/content/near-and-far",
+      "downloadUrl": "https://opengameart.org/sites/default/files/Near_and_Far.ogg",
+      "license": "CC0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "file": "jp-05.mp3",
+      "changes": "Transcoded to MP3 and loudness normalized"
+    },
+    "JP-06": {
+      "title": "Resolutions",
+      "artist": "Scott Buckley",
+      "sourceUrl": "https://www.scottbuckley.com.au/library/resolutions/",
+      "downloadUrl": "https://www.scottbuckley.com.au/library/wp-content/uploads/2022/01/Resolutions.mp3",
+      "license": "CC BY 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+      "file": "jp-06.mp3",
+      "changes": "Transcoded to MP3 and loudness normalized"
+    }
+  }
+}

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Campaign, Mission, SimState } from '../types';
 import { bucketSurfaceHeight } from '../sim/bucket';
+import { shipLandingPoint } from '../sim/shipLanding';
 
 const TAU = Math.PI * 2;
 const clamp = THREE.MathUtils.clamp;
@@ -18,7 +19,7 @@ export function createGroundCrew(scene: THREE.Scene, campaign: Campaign, mission
   scene.add(root);
 
   const japanese = campaign.id === 'jp_ketapang_2026_09';
-  const site = japanese ? (mission.shore ?? mission.lake) : mission.ship;
+  const site = japanese ? (mission.shore ?? mission.lake) : shipLandingPoint(campaign, mission);
   const siteX = site.x, siteZ = site.z;
   const floorAt = (x: number, z: number) => bucketSurfaceHeight(campaign, mission, x, z);
 
