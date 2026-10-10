@@ -3,6 +3,8 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
 import type { Campaign, Mission, SimState } from '../types';
 import { evaluateTimeOfDay } from './timeOfDay';
 import { lakeShapeProfile } from '../sim/lakeShape';
+import { campaignTerrainAnchor } from '../content/terrainFrame';
+import { shipToLocal } from '../sim/shipLanding';
 
 export type WaterQuality = {
   reflectionSize: 256 | 512;
@@ -41,6 +43,7 @@ const fragmentShader = /* glsl */`
   uniform float daylightAmbient;
   uniform vec2 wind;
   uniform vec4 ship;
+  uniform float shipHeading;
   uniform float shipLength;
   uniform vec3 lake;
   uniform float lakeShapeBase;
@@ -128,7 +131,9 @@ const fragmentShader = /* glsl */`
 
     // Moored vessel: small reflected wave trains and foam at the waterline,
     // rather than a fast-moving wake behind a stationary gameplay platform.
-    vec2 shipP = p-ship.xy;
+    vec2 shipOffset = p-ship.xy;
+    vec2 shipP = vec2(shipOffset.x*cos(shipHeading)-shipOffset.y*sin(shipHeading),
+      shipOffset.x*sin(shipHeading)+shipOffset.y*cos(shipHeading));
     float bow = ship.w-shipLength;
     float width = ship.z * mix(.06,.42,smoothstep(bow,bow+shipLength*.19,shipP.y));
     float hullDistance = max(abs(shipP.x)-width,max(bow-shipP.y,shipP.y-ship.w));
@@ -191,7 +196,8 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
   const jp = campaign.id === 'jp_ketapang_2026_09';
   const lakeShape = lakeShapeProfile(campaign.id);
   const target = mission.shore ?? mission.lake;
-  const route = new THREE.Vector2(target.x-mission.ship.x,target.z-mission.ship.z);
+  const coastOrigin = campaignTerrainAnchor(campaign);
+  const route = new THREE.Vector2(target.x-coastOrigin.x,target.z-coastOrigin.z);
   const routeLength = route.length(); route.normalize();
   const shared = {
     daylightSun: { value: new THREE.Vector3() }, daylightSunColor: { value: new THREE.Color() },
@@ -199,12 +205,13 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
     daylightStrength: { value: 1 }, daylightAmbient: { value: 1 },
     time: { value: 0 }, wind: { value: new THREE.Vector2(mission.wind.x,mission.wind.z) },
     ship: { value: new THREE.Vector4(mission.ship.x,mission.ship.z,campaign.shipWidth,jp?40:35) },
+    shipHeading: { value: mission.shipHeading },
     shipLength: { value: campaign.shipLength },
     lake: { value: new THREE.Vector3(mission.lake.x,mission.lake.z,mission.lake.radius) },
     lakeShapeBase: { value: lakeShape.base },
     lakeShapeHarmonicsA: { value: new THREE.Vector4(...lakeShape.harmonics[0], ...lakeShape.harmonics[1]) },
     lakeShapeHarmonicsB: { value: new THREE.Vector4(...lakeShape.harmonics[2], ...lakeShape.harmonics[3]) },
-    coast: { value: new THREE.Vector4(mission.ship.x,mission.ship.z,route.x,route.y) },
+    coast: { value: new THREE.Vector4(coastOrigin.x,coastOrigin.z,route.x,route.y) },
     coastStart: { value: routeLength*.42 },
     washA: { value: new THREE.Vector3() }, washB: { value: new THREE.Vector3() },
     bucketRipple: { value: new THREE.Vector3() },
@@ -288,8 +295,9 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
       const overLake=Math.hypot(p.x-mission.lake.x,p.z-mission.lake.z)<mission.lake.radius+100;
       activeKind=overLake?1:0;
       const height=overLake?.025:-9;
-      const overSea=(p.x-mission.ship.x)*route.x+(p.z-mission.ship.z)*route.y<routeLength*.42;
-      const aboveDeck=Math.abs(p.x-mission.ship.x)<campaign.shipWidth*.6 && p.z-mission.ship.z>(jp?40:35)-campaign.shipLength && p.z-mission.ship.z<(jp?40:35);
+      const overSea=(p.x-coastOrigin.x)*route.x+(p.z-coastOrigin.z)*route.y<routeLength*.42;
+      const deckPoint=shipToLocal(mission,p);
+      const aboveDeck=Math.abs(deckPoint.x)<campaign.shipWidth*.6 && deckPoint.z>(jp?40:35)-campaign.shipLength && deckPoint.z<(jp?40:35);
       const strength=(overLake||overSea)&&!aboveDeck&&state.phase!=='failed'
         ? THREE.MathUtils.clamp(1-(p.y-height)/65,0,1)**1.5 : 0;
       const sin=Math.sin(state.heading), cos=Math.cos(state.heading);

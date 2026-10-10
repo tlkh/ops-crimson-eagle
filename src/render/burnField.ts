@@ -1,4 +1,5 @@
 import type { Mission } from '../types';
+import { CAMPAIGN_TERRAIN_ORIGIN } from '../content/terrainFrame';
 
 export type BurnSample = { severity: number; age: number; activity: number };
 export type BurnField = {
@@ -31,7 +32,7 @@ function noise(x: number, y: number, seed: number) {
 /** Paved/support footprints from world.ts, not its much broader tree clearance. */
 export function isBurnProtectedAirport(mission: Mission, x: number, z: number): boolean {
   if (!mission.shore) return false;
-  const dx = mission.shore.x - mission.ship.x, dz = mission.shore.z - mission.ship.z;
+  const dx = mission.shore.x - CAMPAIGN_TERRAIN_ORIGIN.x, dz = mission.shore.z - CAMPAIGN_TERRAIN_ORIGIN.z;
   const length = Math.hypot(dx, dz) || 1;
   const ux = dx / length, uz = dz / length;
   const px = x - mission.shore.x, pz = z - mission.shore.z;

@@ -7,7 +7,7 @@ A browser-based, single-player Chinook firefighting game. Fly from a landing shi
 - **RSAF Deployment — Seruyan, October 2026.** A fictional campaign in which hazardous haze affecting Singapore prompts the SAF to deploy RSS Persistence and an RSAF Chinook crew to support firefighting in Central Kalimantan.
 - **JSDF Deployment — Ketapang, September 2026.** Based on Japan’s real deployment to Indonesia, with reconstructed missions featuring a JGSDF Chinook and JS Kunisaki.
 
-Gameplay maps add rolling lowland hills, varied ground cover, dense regional vegetation, roads, farms, settlements, and detailed coastal transitions, with subtle distant ridges and a port skyline. These procedural scenes use authored local gameplay coordinates; they are illustrative rather than surveyed maps. See the [map geometry notes](docs/map-geometry-references.md) for sources and limits. Mission routes and fire locations are authored game scenarios; [research notes](docs/research-notes.md) explain their sources and assumptions.
+Gameplay maps add rolling lowland hills, varied ground cover, dense regional vegetation, irregular campaign-specific lakes, connected roads with roadside asset clusters, farms, settlements, and detailed coastal transitions, with subtle distant ridges and a port skyline. Japan's campaign also has a fenced airbase, checkpoints, support buildings, and roads connected to the campaign network. Ship position and heading vary slightly between missions while each campaign's recognizable terrain stays fixed. These procedural scenes use authored local gameplay coordinates; they are illustrative rather than surveyed maps. See the [map geometry notes](docs/map-geometry-references.md) for sources and limits. Mission routes and fire locations are authored game scenarios; [research notes](docs/research-notes.md) explain their sources and assumptions.
 
 ## Playing
 
@@ -20,15 +20,14 @@ Follow the objective cues, manage the swinging bucket and water load, and watch 
 | Arrow keys | Move sideways / forward / backward |
 | E | Nearby objective action |
 | Space | Release water near the fire |
-| F | Face the objective — turn only |
 | R | Set the return route |
 | M / Escape | Map / pause |
 
 Tap flight keys for small corrections; hold them to build input gradually. Keyboard turning, climb, and movement have gentler maximum inputs, and releasing a key immediately centres its command. Aircraft momentum still takes time to settle.
 
-Touch controls provide two joysticks: collective/yaw on the left and cyclic movement on the right, plus on-screen action buttons. The flight HUD gives a clear observation step after the last water drop; once crews secure the fire, it advances to recovery.
+Touch controls provide two joysticks: collective/yaw on the left and cyclic movement on the right, plus on-screen action buttons. The flight HUD gives a clear observation step after the last water drop; once crews secure the fire, it advances to recovery. Spoken radio guidance calls out approach, hover height, and speed as you near the lake, fire, or landing point.
 
-Singapore ship recovery requires carrying the bucket over the flight deck before descending vertically onto the marked spot. The ship menu preview shows a top-down view of the mission map and its labeled locations. Each sortie moves through its assigned time of day, with matching sky, sunlight, night lighting, and subtle proximity effects.
+Singapore ship recovery requires carrying the bucket over the flight deck before descending vertically onto the marked spot. The mission briefing shows a top-down view of the actual map and its labeled locations, plus a concise summary of the sortie. Each mission has a small ship pose variation; its landing cues and deck handling follow the ship's heading. Each sortie moves through its assigned time of day, with matching sky, sunlight, night lighting, and subtle proximity effects.
 
 The menu and each mission have their own background track. Music starts after your first interaction, rises gently during a fire attack, and recedes on the return. You can turn it off from the menu or during a sortie. [Music credits and source links](docs/music-credits.json) list all 13 selections.
 

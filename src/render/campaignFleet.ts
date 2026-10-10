@@ -43,6 +43,7 @@ function renderFleet(campaign: Campaign): string {
   const mission = {
     ...sourceMission,
     ship: { ...sourceMission.ship, x: 0, z: 0 },
+    shipHeading: 0,
   };
   const scene = new THREE.Scene();
   let renderer: THREE.WebGLRenderer | undefined;

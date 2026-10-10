@@ -4,6 +4,7 @@ import type { Campaign, Mission } from '../types';
 import type { StructureCollider, TreeCollider } from '../sim/collision';
 import { renderedTerrainHeight } from '../sim/collision';
 import { SEA_SURFACE_Y, type CoastalSampler } from './coastalSampling';
+import { campaignTerrainAnchor } from '../content/terrainFrame';
 
 type Point = { x: number; z: number };
 type Leg = [Point, Point];
@@ -153,6 +154,7 @@ export function createCoastalDetails(
   flightLegs: readonly Leg[],
 ): CoastalDetailsResult {
   const jp = campaign.id === 'jp_ketapang_2026_09';
+  const terrainAnchor = campaignTerrainAnchor(campaign);
   const random = seeded(jp ? 0x4a50434f : 0x52534143);
   const root = new THREE.Group();
   root.name = 'Coastal details';
@@ -349,7 +351,7 @@ export function createCoastalDetails(
   };
   const lakeTarget = mission.lake;
   const lakeLocal = sampler.toLocal(lakeTarget.x, lakeTarget.z);
-  for (let i = 0; i < 3; i++) placeBoat(lakeLocal.x + (i - 1) * 19, lakeLocal.z + mission.lake.radius * .76, i, .04, Math.atan2(sampler.fromLocal(1, 0).x - mission.ship.x, sampler.fromLocal(1, 0).z - mission.ship.z) + .3, i * 2);
+  for (let i = 0; i < 3; i++) placeBoat(lakeLocal.x + (i - 1) * 19, lakeLocal.z + mission.lake.radius * .76, i, .04, Math.atan2(sampler.fromLocal(1, 0).x - terrainAnchor.x, sampler.fromLocal(1, 0).z - terrainAnchor.z) + .3, i * 2);
   let seaBoatCount = 0;
   for (const s of safeBoatS) {
     if (seaBoatCount >= 5) break;
@@ -357,7 +359,7 @@ export function createCoastalDetails(
     const p = sampler.fromLocal(t, s);
     if (!safePoint(p, 260) || distance(p, mission.lake) < mission.lake.radius + 300) continue;
     const tVector = sampler.fromLocal(1, 0);
-    const yaw = Math.atan2(tVector.x - mission.ship.x, tVector.z - mission.ship.z) + (random() - .5) * .28;
+    const yaw = Math.atan2(tVector.x - terrainAnchor.x, tVector.z - terrainAnchor.z) + (random() - .5) * .28;
     placeBoat(t, s, (seaBoatCount + 1) % 3, SEA_SURFACE_Y + .18, yaw, random() * TAU);
     seaBoatCount++;
   }
@@ -449,7 +451,7 @@ export function createCoastalDetails(
     const hutOnlyMesh = new THREE.Mesh(hutOnlyGeometry);
     hutOnlyMesh.position.set(structureAnchor.x, 0, structureAnchor.z);
     const tAxis = sampler.fromLocal(1, 0);
-    const structureYaw = Math.atan2(tAxis.x - mission.ship.x, tAxis.z - mission.ship.z);
+    const structureYaw = Math.atan2(tAxis.x - terrainAnchor.x, tAxis.z - terrainAnchor.z);
     hutOnlyMesh.rotation.y = structureYaw;
     structureColliders.push(colliderFor(hutOnlyMesh, 'coastal stilt hut and jetty'));
     hutOnlyGeometry.dispose();

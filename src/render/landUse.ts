@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { Campaign, Mission } from '../types';
 import type { StructureCollider, TreeCollider } from '../sim/collision';
-import { getCampaignGeography, sampleRoad } from '../content/geography';
+import { getCampaignGeography, getCampaignRoadTermini, sampleRoad } from '../content/geography';
+import { isWithinLakeOutline } from '../sim/lakeShape';
 import type { BurnField } from './burnField';
 
 type Point = { x: number; z: number };
@@ -29,6 +30,7 @@ export interface LandUseStats {
   buildingCount: number;
   bridgeCount: number;
   palmCount: number;
+  roadEndClusterCount: number;
   drawCalls: number;
   triangles: number;
 }
@@ -458,10 +460,11 @@ export function createLandUse(scene: THREE.Scene, campaign: Campaign, mission: M
   const placementClear = (local: LocalPoint, routeMargin = 240) => {
     const world = toWorld(local);
     const ground = groundAt(world.x, world.z);
-    if (!Number.isFinite(ground) || ground < -2 || local.t < context.coastAt(local.s) + 160 || local.t > 6200 || Math.abs(local.s) > 4250) return false;
-    if (distance(world, context.lake) < context.lake.radius + 150) return false;
-    if (distance(world, mission.fire) < mission.fire.radius + 140 || distance(world, mission.lake) < mission.lake.radius + 150) return false;
-    if (protectedMarkers.some(item => distance(world, item.fire) < item.fire.radius + 140 || distance(world, item.lake) < item.lake.radius + 150)) return false;
+    if (!Number.isFinite(ground) || ground < -2 || local.t < context.coastAt(local.s) + 160 || local.t > 6360 || Math.abs(local.s) > 4450) return false;
+    if (isWithinLakeOutline(campaign.id, context.lake, world, 150)) return false;
+    if (distance(world, mission.fire) < mission.fire.radius + 140) return false;
+    if (protectedMarkers.some(item => distance(world, item.fire) < item.fire.radius + 140
+      || isWithinLakeOutline(campaign.id, item.lake, world, 150))) return false;
     if (context.shore && distance(world, context.shore) < 930) return false;
     if (context.flightLegs.some(leg => distanceToLeg(world, leg) < routeMargin)) return false;
     return true;
@@ -768,8 +771,75 @@ export function createLandUse(scene: THREE.Scene, campaign: Campaign, mission: M
   if (palmCount) root.add(palmTrunks, palmLeaves);
   addExclusion({ t: farmOne.t + 500, s: farmOne.s + 1370 }, 100);
 
+  // Rural tracks and outer county roads stop at small working sites. Place a
+  // pair of modest buildings beside every otherwise unserved graph terminus.
+  const terminalSites: LocalPoint[] = [];
+  let roadEndClusterCount = 0;
+  const structureClear = (local: LocalPoint, extra = 22) => {
+    const world = toWorld(local);
+    return structureColliders.every(item => distance(world, { x: item.x, z: item.z })
+      > Math.hypot(item.halfWidth, item.halfLength) + extra)
+      && treeColliders.every(item => distance(world, { x: item.x, z: item.z }) > item.radius + extra);
+  };
+  const endpointCandidates = (origin: LocalPoint, maxDistance: number, occupied: readonly LocalPoint[] = []): LocalPoint[] => {
+    const candidates: LocalPoint[] = [];
+    for (let radius = 36; radius <= maxDistance; radius += 8) {
+      for (let angleIndex = 0; angleIndex < 24; angleIndex++) {
+        const angle = angleIndex / 24 * TAU;
+        candidates.push({ t: origin.t + Math.cos(angle) * radius, s: origin.s + Math.sin(angle) * radius });
+      }
+    }
+    candidates.sort((a, b) => localDistance(a, origin) - localDistance(b, origin));
+    return candidates.filter(local => placementClear(local, 200)
+      && roadClear(local, 25)
+      && structureClear(local)
+      && occupied.every(site => localDistance(site, local) > 45));
+  };
+  const termini = getCampaignRoadTermini(geography.roads).filter(terminus =>
+    // The settlement anchors already have a visible building cluster.
+    geography.settlements.every(settlement => localDistance(settlement.position, terminus.position) > 210));
+  for (const terminus of termini) {
+    let pair: { site: LocalPoint; secondSite: LocalPoint } | undefined;
+    for (const site of endpointCandidates(terminus.position, 68, terminalSites)) {
+      const secondSite = endpointCandidates(terminus.position, 68, [...terminalSites, site])[0];
+      if (secondSite) {
+        pair = { site, secondSite };
+        break;
+      }
+    }
+    if (!pair) throw new Error(`Could not place the road-end asset cluster for ${terminus.roadId} (${terminus.end}) in ${campaign.id}`);
+    const { site, secondSite } = pair;
+    const siteWorld = toWorld(site);
+    makeStiltHouse(root, siteWorld, groundAt(siteWorld.x, siteWorld.z), yawT, .76, materials,
+      `Road-end ${terminus.roadId} ${terminus.end} cottage`, structureColliders);
+    addExclusion(site, 26);
+    buildingCount++;
+
+    const secondWorld = toWorld(secondSite);
+    makeBarn(root, secondWorld, groundAt(secondWorld.x, secondWorld.z), yawT + .05, materials,
+      `Road-end ${terminus.roadId} ${terminus.end} equipment shed`, structureColliders);
+    addExclusion(secondSite, 38);
+    buildingCount++;
+    // Each working site has a visible arrival route, rather than buildings
+    // sitting in an unconnected clearing beyond the end of a track.
+    for (const [destination, setback] of [[site, 7], [secondSite, 12]] as const) {
+      const length = localDistance(terminus.position, destination);
+      const fraction = Math.max(0, (length - setback) / length);
+      const drive = sampleRoad([terminus.position, {
+        t: terminus.position.t + (destination.t - terminus.position.t) * fraction,
+        s: terminus.position.s + (destination.s - terminus.position.s) * fraction,
+      }], 4);
+      makeBurnableRoadMesh(ribbonGeometry(drive, 4.2, context.fromLocal, groundAt, .12), trackEdgeMaterial, 'Road-end driveway shoulder');
+      makeBurnableRoadMesh(ribbonGeometry(drive, 2.5, context.fromLocal, groundAt, .22), trackMaterial, 'Road-end driveway');
+      for (const point of drive) addRoadExclusion(point, 8);
+      trackLengthM += length - setback;
+    }
+    terminalSites.push(site);
+    roadEndClusterCount++;
+  }
+
   root.updateMatrixWorld(true);
-  const stats: LandUseStats = { roadLengthM, trackLengthM, fieldCount, buildingCount, bridgeCount, palmCount, drawCalls: 0, triangles: 0 };
+  const stats: LandUseStats = { roadLengthM, trackLengthM, fieldCount, buildingCount, bridgeCount, palmCount, roadEndClusterCount, drawCalls: 0, triangles: 0 };
   root.traverse(object => {
     const mesh = object as THREE.Mesh;
     if (!mesh.isMesh && !(mesh as THREE.InstancedMesh).isInstancedMesh) return;

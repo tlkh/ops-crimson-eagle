@@ -1,5 +1,7 @@
 import { createScene } from '../../src/render';
 import { campaigns } from '../../src/content';
+import { campaignTerrainFrame } from '../../src/content/terrainFrame';
+import { getCampaignGeography } from '../../src/content/geography';
 import { createSim } from '../../src/sim';
 import type { ExtendedSimState } from '../../src/sim/types';
 import type { GraphicsMode } from '../../src/render/quality';
@@ -24,6 +26,10 @@ for (const value of ['burning', 'surface_suppressed', 'secured']) stageSelect.ad
 stageLabel.append(stageSelect);
 document.querySelector('header')!.append(missionLabel, stageLabel);
 viewSelect.add(new Option('burn-trail', 'burn-trail'));
+viewSelect.add(new Option('airbase', 'airbase'));
+viewSelect.add(new Option('airbase-facilities', 'airbase-facilities'));
+viewSelect.add(new Option('lake-overview', 'lake-overview'));
+viewSelect.add(new Option('road-end', 'road-end'));
 campaignSelect.value = params.get('campaign') === 'jp' ? 'jp' : 'sg';
 viewSelect.value = params.get('view') ?? 'deck';
 qualitySelect.value = params.get('quality') ?? 'high';
@@ -81,7 +87,7 @@ document.querySelector('#pause')!.addEventListener('click', event => {
 });
 document.querySelector('#capture')!.addEventListener('click', () => {
   // Capture in the same task as drawing; no persistent WebGL drawing buffer.
-  scene.renderFrame(0);
+  scene.renderFrame(0, fixtureCamera());
   const canvas = host.querySelector('canvas')!;
   canvas.toBlob(blob => {
     if (!blob) return;
@@ -94,12 +100,35 @@ document.querySelector('#capture')!.addEventListener('click', () => {
   }, 'image/jpeg', .94);
 });
 rebuild();
+function fixtureCamera() {
+  if (viewSelect.value === 'lake-overview') return {
+    position: { x: mission.lake.x + 60, y: 720, z: mission.lake.z - 220 },
+    target: { x: mission.lake.x, y: 0, z: mission.lake.z }, fov: 50,
+  };
+  if (viewSelect.value === 'road-end') {
+    const end = getCampaignGeography(campaign).roads.find(road => road.id === `sector-access-${mission.id.toLowerCase()}`)!.points.at(-1)!;
+    const { origin, ux, uz, sx, sz } = campaignTerrainFrame(campaign, mission);
+    const target = { x: origin.x + end.t * ux + end.s * sx, y: 0, z: origin.z + end.t * uz + end.s * sz };
+    return { position: { x: target.x - 120, y: 145, z: target.z - 140 }, target, fov: 50 };
+  }
+  if (!viewSelect.value.startsWith('airbase') || !mission.shore) return undefined;
+  const { ux, uz } = campaignTerrainFrame(campaign, mission);
+  const point = (x: number, y: number, z: number) => ({
+    x: mission.shore!.x + x * uz + z * ux, y,
+    z: mission.shore!.z - x * ux + z * uz,
+  });
+  return viewSelect.value === 'airbase-facilities'
+    ? { position: point(-320, 280, -200), target: point(0, 0, 140), fov: 48 }
+    : { position: point(-850, 1250, 1300), target: point(25, 0, 350), fov: 50 };
+}
 let prior = performance.now();
 function frame(now: number) {
   const delta = Math.max(0, Math.min(.1, (now - prior) / 1000)); prior = now;
   if (!paused) { state.timeSec += delta; state.tick++; }
   scene.update(state, campaign, mission);
-  if (scene.renderScheduledFrame(now, paused)) frameCount++;
+  const camera = fixtureCamera();
+  if (camera) { scene.renderFrame(paused ? 0 : delta, camera); frameCount++; }
+  else if (scene.renderScheduledFrame(now, paused)) frameCount++;
   if (now - lastMetrics > 1000) {
     const d = scene.diagnostics();
     output.value = `${mission.id} · ${viewSelect.value} · ${qualitySelect.value} · ${state.fireState}\n${d.width} × ${d.height} · target ${d.targetFps} FPS · level ${d.qualityLevel}\nCPU ${d.cpuSubmissionMs.toFixed(1)} ms · GPU ${d.gpuMs?.toFixed(1) ?? 'unavailable'} ms\nFrame interval p50/p95 ${d.frameIntervalP50Ms.toFixed(1)} / ${d.frameIntervalP95Ms.toFixed(1)} ms\n${d.calls} draws · ${d.triangles.toLocaleString()} triangles\n${d.textures} textures · ${d.geometries} geometries · scene ${(d.estimatedSceneBytes/1048576).toFixed(1)} MiB + post ${(d.renderTargetBytes/1048576).toFixed(1)} MiB\nDamaged trees ${d.burnedTrees} · bare ${d.charredTrees} · branch tris ${d.damageTriangles}\nRendered ${frameCount} · simulation ${state.timeSec.toFixed(1)} s`;

@@ -1,5 +1,6 @@
 import type { Campaign, Mission } from '../types';
 import { terrainHeight as collisionTerrainHeight } from '../sim/collision';
+import { campaignTerrainFrame } from '../content/terrainFrame';
 
 export const SEA_SURFACE_Y = -9;
 
@@ -40,11 +41,7 @@ export interface CoastalSampler {
 /** Shared coastline frame and surface sampler for render effects. Its curve and height field
  * match the collision terrain; it does not introduce any new gameplay elevations. */
 export function createCoastalSampler(campaign: Campaign, mission: Mission): CoastalSampler {
-  const target = mission.shore ?? mission.lake;
-  const dx = target.x - mission.ship.x, dz = target.z - mission.ship.z;
-  const routeLength = Math.max(1, Math.hypot(dx, dz));
-  const ux = dx / routeLength, uz = dz / routeLength;
-  const sx = -uz, sz = ux;
+  const { origin, length: routeLength, ux, uz, sx, sz } = campaignTerrainFrame(campaign, mission);
   const coastStart = routeLength * .42;
   const coastAt = (s: number) => coastStart + 34 * Math.sin(s * .003) + 19 * Math.sin(s * .008 + .5);
 
@@ -53,21 +50,21 @@ export function createCoastalSampler(campaign: Campaign, mission: Mission): Coas
     coastStart,
     toLocal(x, z) { return this.toLocalInto(x, z, { x: 0, z: 0 }); },
     toLocalInto(x, z, out) {
-      const rx = x - mission.ship.x, rz = z - mission.ship.z;
+      const rx = x - origin.x, rz = z - origin.z;
       out.x = rx * ux + rz * uz;
       out.z = rx * sx + rz * sz;
       return out;
     },
     fromLocal(t, s) { return this.fromLocalInto(t, s, { x: 0, z: 0 }); },
     fromLocalInto(t, s, out) {
-      out.x = mission.ship.x + t * ux + s * sx;
-      out.z = mission.ship.z + t * uz + s * sz;
+      out.x = origin.x + t * ux + s * sx;
+      out.z = origin.z + t * uz + s * sz;
       return out;
     },
     coastAt,
     sample(x, z) { return this.sampleInto(x, z, { t: 0, s: 0, shoreDistance: 0, terrainHeight: null, surfaceHeight: SEA_SURFACE_Y, isLand: false, isShallow: false }); },
     sampleInto(x, z, out) {
-      const rx = x - mission.ship.x, rz = z - mission.ship.z;
+      const rx = x - origin.x, rz = z - origin.z;
       const t = rx * ux + rz * uz;
       const s = rx * sx + rz * sz;
       const shoreDistance = t - coastAt(s);

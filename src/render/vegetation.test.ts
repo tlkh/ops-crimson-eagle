@@ -12,6 +12,7 @@ const mission: Mission = {
   lesson: '',
   seed: 101,
   ship: { x: 0, z: 0, label: 'ship' },
+  shipHeading: 0,
   lake: { x: 2_100, z: 0, radius: 115, label: 'lake' },
   fire: { x: 3_400, z: 0, radius: 105, label: 'fire' },
   wind: { x: 0, z: 0 },

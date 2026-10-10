@@ -368,5 +368,5 @@ export function createShip(scene: THREE.Scene, campaign: Campaign, mission: Miss
   }
   // Sparse foredeck bollards and hawse details; no cargo placed in helicopter workspace.
   for(const side of [-1,1]) {box(g,.8,.55,2,side*B*.22,DECK+.28,s(.12),dark);sphere(g,.32,side*B*.32,-1.8,s(.15),black);}
-  batch(g); g.position.set(mission.ship.x,0,mission.ship.z);scene.add(g);return g;
+  batch(g); g.position.set(mission.ship.x,0,mission.ship.z); g.rotation.y = mission.shipHeading; scene.add(g);return g;
 }

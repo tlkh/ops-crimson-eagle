@@ -8,10 +8,12 @@ import { createCoastalDetails } from './coastalDetails';
 import { createCoastalSampler } from './coastalSampling';
 import { createGroundSurface } from './groundSurface';
 import { createLandUse } from './landUse';
+import { createJapanAirbase } from './airbase';
 import { createVegetation } from './vegetation';
 import { ExclusionLookup } from './exclusionLookup';
 import { createDistantScenery } from './distantScenery';
 import { getCampaignGeography } from '../content/geography';
+import { campaignTerrainFrame } from '../content/terrainFrame';
 import type { RenderQualityProfile } from './quality';
 import type { TextureAssets } from './textureAssets';
 import { createBurnField, isBurnProtectedAirport } from './burnField';
@@ -34,13 +36,10 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   const jp = campaign.id === 'jp_ketapang_2026_09';
   // Fixed theatre seed: the coastline and forest do not rearrange between sorties.
   const random = seeded(jp ? 62017 : 62135);
-  const target = mission.shore ?? mission.lake;
   const coastalSampler = createCoastalSampler(campaign, mission);
-  const dx = target.x - mission.ship.x, dz = target.z - mission.ship.z;
-  const routeLength = Math.max(1, Math.hypot(dx, dz));
-  const ux = dx / routeLength, uz = dz / routeLength, sx = -uz, sz = ux;
-  const fromLocal = (t: number, s: number): V => ({ x: mission.ship.x + t * ux + s * sx, z: mission.ship.z + t * uz + s * sz });
-  const local = (p: V) => ({ t: (p.x - mission.ship.x) * ux + (p.z - mission.ship.z) * uz, s: (p.x - mission.ship.x) * sx + (p.z - mission.ship.z) * sz });
+  const { origin, length: routeLength, ux, uz, sx, sz } = campaignTerrainFrame(campaign, mission);
+  const fromLocal = (t: number, s: number): V => ({ x: origin.x + t * ux + s * sx, z: origin.z + t * uz + s * sz });
+  const local = (p: V) => ({ t: (p.x - origin.x) * ux + (p.z - origin.z) * uz, s: (p.x - origin.x) * sx + (p.z - origin.z) * sz });
   const flightLegs = campaign.missions.flatMap(m => {
     const first = m.shore ?? m.lake;
     return [[m.ship, first], [first, m.lake], [m.lake, m.fire]] as [V, V][];
@@ -127,7 +126,12 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     river: { centerS: riverS, halfWidth: jp ? 68 : 48 },
     shore: mission.shore,
   });
-  const burnExclusions = new ExclusionLookup(landUse.burnExclusionZones);
+  const airbase = createJapanAirbase(scene, campaign, mission, {
+    toWorld: point => fromLocal(routeLength + point.z, -point.x),
+    terrainHeight,
+    renderedTerrainHeight: (x, z) => renderedTerrainHeight(campaign, mission, x, z),
+  });
+  const burnExclusions = new ExclusionLookup([...landUse.burnExclusionZones, ...(airbase?.burnProtectedZones ?? [])]);
   // One immutable footprint aligns the terrain, damaged trees and active edge.
   // Water, support facilities, settlements and crops stay protected; roads remain burnable.
   const burnField = createBurnField(mission, { eligible: (x, z) => {
@@ -139,6 +143,7 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     return !burnExclusions.contains(x, z, 8);
   } });
   landUse.applyBurnField(burnField);
+  airbase?.applyBurnField(burnField);
   const groundSurface = createGroundSurface(options.textureAssets, burnField);
   const land = new THREE.Mesh(terrain, groundSurface.material); land.receiveShadow = true; scene.add(land);
   const vegetation = createVegetation(scene, campaign, mission, {
@@ -150,9 +155,11 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     riverS,
     flightLegs,
     settlementExclusions: [],
-    farmExclusions: landUse.exclusionZones.map(zone => ({ center: { x: zone.x, z: zone.z }, radius: zone.radius })),
-    roadsideRoads: getCampaignGeography(campaign).roads,
-    roadsideExclusions: landUse.burnExclusionZones.map(zone => ({ center: { x: zone.x, z: zone.z }, radius: zone.radius })),
+    farmExclusions: [...landUse.exclusionZones, ...(airbase?.vegetationExclusionZones ?? []), ...(airbase?.structureExclusionZones ?? [])]
+      .map(zone => ({ center: { x: zone.x, z: zone.z }, radius: zone.radius })),
+    roadsideRoads: [...getCampaignGeography(campaign).roads, ...(airbase?.roads ?? [])],
+    roadsideExclusions: [...landUse.burnExclusionZones, ...(airbase?.structureExclusionZones ?? [])]
+      .map(zone => ({ center: { x: zone.x, z: zone.z }, radius: zone.radius })),
     burnField,
     visualTier: options.preview || window.matchMedia('(max-width: 768px), (pointer: coarse)').matches ? 'reduced' : 'full',
   });
@@ -213,7 +220,7 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
       label,
     };
   });
-  structureColliders.push(...landUse.structureColliders, ...coastalDetails.structureColliders);
+  structureColliders.push(...landUse.structureColliders, ...coastalDetails.structureColliders, ...(airbase?.structureColliders ?? []));
   setStructureColliders(mission, structureColliders);
   let detail: 'high' | 'low' = 'high';
   return {
@@ -229,7 +236,7 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
       coastalDetails.update(time, nightStrength);
       if (camera) vegetation.update(camera, detail);
     },
-    dispose() { distantScenery.dispose(); coastalDetails.dispose(); landUse.dispose(); vegetation.dispose(); water.dispose(); groundSurface.dispose(); },
+    dispose() { distantScenery.dispose(); coastalDetails.dispose(); airbase?.dispose(); landUse.dispose(); vegetation.dispose(); water.dispose(); groundSurface.dispose(); },
     terrainHeight, burnField, lake, shore, boats: coastalDetails.boats, coastalStats: coastalDetails.stats,
     vegetationStats: vegetation.stats, landUseStats: landUse.stats,
     coastalLightingAnchor: coastalDetails.lightingAnchor, route: { ux, uz, sx, sz, routeLength },

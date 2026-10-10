@@ -175,7 +175,6 @@ async function act(name: string) {
   if (paused) return;
   if (name === 'drop') command.drop = true;
   if (name === 'fetch') command.fetch = true;
-  if (name === 'faceObjective') command.faceObjective = true;
   if (name === 'action') command.action = true;
   if (name === 'return') command.returnHome = true;
 }
@@ -193,7 +192,6 @@ window.addEventListener('keydown', event => {
   keys.add(key);
   if (event.repeat) return;
   if (key === ' ') void act('drop');
-  if (key === 'f') void act('faceObjective');
   if (key === 'e' && campaign && mission) {
     const opportunity = getObjectiveAction(state, campaign, mission);
     if (opportunity === 'fetch') void act('fetch');

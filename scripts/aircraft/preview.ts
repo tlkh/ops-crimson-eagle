@@ -62,6 +62,10 @@ const views: Record<string, View> = {
   top: { position: [0, 35, .01], height: 34 },
   'front-quarter': { position: [14, 5, -22], height: 12 },
   'rear-quarter': { position: [14, 8, 25], height: 14 },
+  // Approximate the supplied low rear-quarter photo; orthographic for a
+  // repeatable proportion check, not a recovered photographic camera.
+  'rear-photo': { position: [-12, 2.7, 30], height: 8, target: [0, .65, 1.5] },
+  'rear-detail': { position: [0, 1.6, 22], height: 4.8, target: [0, .1, 7] },
   underside: { position: [10, -16, 20], height: 12 },
   gear: { position: [8, -3.7, 18], height: 5.8, target: [0, -1.2, 4.9] },
 };

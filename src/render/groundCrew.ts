@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Campaign, Mission, SimState } from '../types';
 import { bucketSurfaceHeight } from '../sim/bucket';
-import { shipLandingPoint } from '../sim/shipLanding';
+import { shipLandingLocalZ, shipLandingPoint, shipToWorld } from '../sim/shipLanding';
 
 const TAU = Math.PI * 2;
 const clamp = THREE.MathUtils.clamp;
@@ -21,6 +21,9 @@ export function createGroundCrew(scene: THREE.Scene, campaign: Campaign, mission
   const japanese = campaign.id === 'jp_ketapang_2026_09';
   const site = japanese ? (mission.shore ?? mission.lake) : shipLandingPoint(campaign, mission);
   const siteX = site.x, siteZ = site.z;
+  const aroundSite = (dx: number, dz: number) => japanese
+    ? { x: siteX + dx, z: siteZ + dz }
+    : shipToWorld(mission, { x: dx, z: shipLandingLocalZ(campaign) + dz });
   const floorAt = (x: number, z: number) => bucketSurfaceHeight(campaign, mission, x, z);
 
   const coveralls = new THREE.MeshStandardMaterial({ color: '#263944', roughness: .88 });
@@ -128,6 +131,7 @@ export function createGroundCrew(scene: THREE.Scene, campaign: Campaign, mission
 
   const surfaceProp = (group: THREE.Group, x: number, z: number) => {
     group.position.set(x, floorAt(x, z), z);
+    group.rotation.y = japanese ? 0 : mission.shipHeading;
     root.add(group);
     return group;
   };
@@ -136,7 +140,7 @@ export function createGroundCrew(scene: THREE.Scene, campaign: Campaign, mission
     mesh.position.set(...at); mesh.castShadow = mesh.receiveShadow = true; parent.add(mesh); return mesh;
   };
   // Compact reel trolley, kept at the marked handling station throughout flight.
-  const cartX = siteX + 9.25, cartZ = siteZ - 5.6;
+  const { x: cartX, z: cartZ } = aroundSite(9.25, -5.6);
   const cart = surfaceProp(new THREE.Group(), cartX, cartZ);
   cart.name = 'Wheeled sling cable reel';
   const frameMesh = makeStaticInstances(new THREE.BoxGeometry(1, 1, 1), steel, 8, 'Reel trolley frame', cart);
@@ -167,7 +171,8 @@ export function createGroundCrew(scene: THREE.Scene, campaign: Campaign, mission
   // The drum centre sits high enough to be seen in the chase view.
   reel.position.set(0, 1.21, 0);
 
-  const toolbox = surfaceProp(new THREE.Group(), siteX + 9.3, siteZ + 5.0);
+  const toolboxPoint = aroundSite(9.3, 5.0);
+  const toolbox = surfaceProp(new THREE.Group(), toolboxPoint.x, toolboxPoint.z);
   toolbox.name = 'Ground crew toolbox';
   box(toolbox, [.88, .43, .56], [0, .24, 0], toolboxMat);
   const toolboxSteel = makeStaticInstances(new THREE.BoxGeometry(1, 1, 1), steel, 2, 'Toolbox lid and clasp', toolbox);
@@ -180,7 +185,8 @@ export function createGroundCrew(scene: THREE.Scene, campaign: Campaign, mission
   const coneBodies = makeStaticInstances(new THREE.ConeGeometry(.22, .55, 10), coneMat, 3, 'Safety cones', root);
   const coneBands = makeStaticInstances(new THREE.CylinderGeometry(.125, .145, .07, 10), coneStripe, 3, 'Safety cone reflective bands', root);
   conePlaces.forEach(([dx, dz], index) => {
-    const x = siteX + dx, z = siteZ + dz, floor = floorAt(x, z);
+    const { x, z } = aroundSite(dx, dz);
+    const floor = floorAt(x, z);
     placeStaticInstance(coneBases, index, [x, floor + .0325, z], [.54, .065, .54]);
     placeStaticInstance(coneBodies, index, [x, floor + .34, z], [1, 1, 1]);
     placeStaticInstance(coneBands, index, [x, floor + .3, z], [1, 1, 1]);
@@ -230,7 +236,7 @@ export function createGroundCrew(scene: THREE.Scene, campaign: Campaign, mission
     cart.visible = toolbox.visible = true;
     // Axle sway is deliberately tiny: the trolley remains planted while the
     // aircraft and bucket move independently through the simulation.
-    cart.rotation.y = 0;
+    cart.rotation.y = japanese ? 0 : mission.shipHeading;
     cart.position.x = cartX;
     cart.position.z = cartZ;
     cart.position.y = floorAt(cartX, cartZ);
@@ -255,10 +261,10 @@ export function createGroundCrew(scene: THREE.Scene, campaign: Campaign, mission
       const step = Math.sin(time * 8.8 + i * Math.PI) * .13 * walking;
       let x = sx + (wx - sx) * factor;
       let z = sz + (wz - sz) * factor;
-      const px = siteX + x, pz = siteZ + z;
+      const { x: px, z: pz } = aroundSite(x, z);
       const floor = floorAt(px, pz);
-      const targetX = worker.role === 'signal' ? siteX : siteX + 6;
-      const targetZ = worker.role === 'signal' ? siteZ + 1.5 : siteZ;
+      const target = worker.role === 'signal' ? aroundSite(0, 1.5) : aroundSite(6, 0);
+      const targetX = target.x, targetZ = target.z;
       const yaw = Math.atan2(targetX - px, targetZ - pz);
       const crouch = worker.role === 'rigger' ? factor * .24 : 0;
       const lean = worker.role === 'rigger' ? factor * .18 : 0;

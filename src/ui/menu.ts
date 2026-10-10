@@ -38,6 +38,12 @@ function lightingPeriod(minutes: number): string {
   const hour = (minutes % 1440) / 60;
   return hour < 6 ? 'Dawn' : hour < 11 ? 'Morning' : hour < 16 ? 'Noon' : hour < 18 ? 'Sunset' : hour < 20 ? 'Dusk' : 'Night';
 }
+function missionSummary(mission: Mission): string {
+  const start = lightingPeriod(mission.timeOfDay.startMinutes).toLowerCase();
+  const startPhrase = start === 'morning' ? 'in the morning' : `at ${start}`;
+  const riggingSite = mission.shore ? 'at the coastal airbase' : 'on the ship';
+  return `Flight begins ${startPhrase}; rig the bucket ${riggingSite}, then collect water for the fire.`;
+}
 function progressFor(campaign: Campaign): unknown {
   try { return JSON.parse(localStorage.getItem(`progress:${campaign.id}`) || '{}'); }
   catch { return {}; }
@@ -197,8 +203,7 @@ export function createMenu(menu: HTMLElement, campaigns: Campaign[], options: Me
     });
     const panel = menu.querySelector<HTMLElement>('.cm-briefing')!;
     const index = campaign.missions.indexOf(mission) + 1;
-    const route = mission.shore ? 'Ship → shore rigging → lake → fire → shore recovery → ship' : 'Ship → lake → fire → ship';
-    panel.innerHTML = `${fleet(campaign)}${kit(campaign)}<div class="cm-briefing-copy"><p class="cm-evidence">${escape(campaign.name)} · ${escape(campaign.subtitle)}</p><span class="cm-eyebrow">Mission ${String(index).padStart(2, '0')} / ${mission.id.endsWith('01') ? 'Training' : 'Fire suppression'}</span><h2 tabindex="-1">${escape(mission.title)}</h2><p>${escape(mission.description)}</p></div><details class="cm-lesson"><summary>Flying advice</summary><p>${escape(mission.lesson)}</p></details><div class="cm-facts"><p>${lightingPeriod(mission.timeOfDay.startMinutes)} → ${lightingPeriod(mission.timeOfDay.endMinutes)} · accelerated daylight</p><p>${escape(route)}</p><p>About ${Math.round(mission.durationTargetSec / 60)} simulated minutes · ${mission.requiredDrops} useful ${mission.requiredDrops === 1 ? 'drop' : 'drops'}</p></div><div class="cm-launch-area"><button type="button" class="cm-launch">${arrow}<span>Launch sortie</span></button><small>A matching saved sortie resumes automatically.</small><p class="cm-error" role="alert" hidden></p></div>`;
+    panel.innerHTML = `${fleet(campaign)}${kit(campaign)}<div class="cm-briefing-copy"><p class="cm-evidence">${escape(campaign.name)} · ${escape(campaign.subtitle)}</p><span class="cm-eyebrow">Mission ${String(index).padStart(2, '0')} / ${mission.id.endsWith('01') ? 'Training' : 'Fire suppression'}</span><h2 tabindex="-1">${escape(mission.title)}</h2><p>${escape(mission.description)}</p></div><details class="cm-lesson"><summary>Flying advice</summary><p>${escape(mission.lesson)}</p></details><div class="cm-facts"><p class="cm-summary">${escape(missionSummary(mission))}</p></div><div class="cm-launch-area"><button type="button" class="cm-launch">${arrow}<span>Launch sortie</span></button><small>A matching saved sortie resumes automatically.</small><p class="cm-error" role="alert" hidden></p></div>`;
     loadFleet(campaign);
     panel.querySelector('.cm-launch')!.addEventListener('click', () => { void launchMission(campaign, mission); });
     if (event) animate(panel.querySelector('.cm-briefing-copy'), 'detail', event);

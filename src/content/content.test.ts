@@ -15,7 +15,9 @@ describe('campaign content', () => {
   it('keeps each campaign on one local map and distinguishes every fire target', () => {
     for (const campaign of campaigns) {
       const [first, ...rest] = campaign.missions;
-      expect(first.ship).toMatchObject({ x: 0, z: 0 });
+      const poses = new Set(campaign.missions.map(mission => `${mission.ship.x},${mission.ship.z},${mission.shipHeading}`));
+      expect(poses.size).toBe(campaign.missions.length);
+      expect(campaign.missions.every(mission => Math.hypot(mission.ship.x, mission.ship.z) <= 30)).toBe(true);
       for (const mission of rest) {
         expect(mission.lake).toMatchObject({ x: first.lake.x, z: first.lake.z });
         expect(mission.fire).not.toMatchObject({ x: first.fire.x, z: first.fire.z });

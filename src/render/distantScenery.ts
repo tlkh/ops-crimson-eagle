@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Campaign, Mission } from '../types';
+import { campaignTerrainFrame } from '../content/terrainFrame';
 
 export type DistantSceneryContext = { preview?: boolean };
 
@@ -124,10 +125,9 @@ export function createDistantScenery(
 
   const root = new THREE.Group();
   root.name = 'Distant scenery';
-  const target = mission.shore ?? mission.lake;
-  const dx = target.x - mission.ship.x, dz = target.z - mission.ship.z;
-  root.position.set(mission.ship.x, 0, mission.ship.z);
-  root.rotation.y = Math.atan2(dx, dz);
+  const { origin, ux, uz } = campaignTerrainFrame(campaign, mission);
+  root.position.set(origin.x, 0, origin.z);
+  root.rotation.y = Math.atan2(ux, uz);
 
   const nearRidge = new THREE.Mesh(
     ridgeGeometry(campaign.id === 'jp_ketapang_2026_09' ? 0x4a504e : 0x525341, 15500, 8650, 1150, 290),

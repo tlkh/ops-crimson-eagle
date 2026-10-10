@@ -1,6 +1,8 @@
 import type { Campaign, Mission, SimState, Vec3 } from '../types';
 import { renderedTerrainHeight } from './collision';
 import { isWithinLakeOutline } from './lakeShape';
+import { shipToLocal } from './shipLanding';
+import { campaignTerrainAnchor } from '../content/terrainFrame';
 
 /** `state.bucket` is the center of the open rim, in world coordinates. */
 export const BUCKET_BODY_HEIGHT_M = 1.48;
@@ -21,8 +23,7 @@ export function isBucketFootprintOverDeck(state: Pick<SimState, 'bucket'>, campa
   const stern = campaign.id === 'jp_ketapang_2026_09' ? 40 : 35;
   const radius = BUCKET_FOOTPRINT_RADIUS_M;
   const halfWidth = campaign.shipWidth / 2;
-  const localX = state.bucket.x - mission.ship.x;
-  const localZ = state.bucket.z - mission.ship.z;
+  const { x: localX, z: localZ } = shipToLocal(mission, state.bucket);
   return Math.abs(localX) + radius <= halfWidth &&
     localZ - radius >= stern - campaign.shipLength &&
     localZ + radius <= stern;
@@ -61,8 +62,7 @@ export function getBucketHook(state: Pick<SimState, 'position' | 'heading' | 'pi
 
 /** Actual visible contact surface under a bucket: deck, freshwater, land, or sea. */
 export function bucketSurfaceHeight(campaign: Campaign, mission: Mission, x: number, z: number): number {
-  const localX = x - mission.ship.x;
-  const localZ = z - mission.ship.z;
+  const { x: localX, z: localZ } = shipToLocal(mission, { x, z });
   const stern = campaign.id === 'jp_ketapang_2026_09' ? 40 : 35;
   if (Math.abs(localX) <= campaign.shipWidth / 2 &&
     localZ >= stern - campaign.shipLength && localZ <= stern) return -2.525;
@@ -71,7 +71,8 @@ export function bucketSurfaceHeight(campaign: Campaign, mission: Mission, x: num
   if (isWithinLakeOutline(campaign.id, mission.lake, { x, z })) return LAKE_SURFACE_M;
   if (mission.shore) {
     // Match the rotated handling pad, apron, runway and taxiways in world.ts.
-    const routeX = mission.shore.x - mission.ship.x, routeZ = mission.shore.z - mission.ship.z;
+    const anchor = campaignTerrainAnchor(campaign);
+    const routeX = mission.shore.x - anchor.x, routeZ = mission.shore.z - anchor.z;
     const length = Math.max(1, Math.hypot(routeX, routeZ));
     const dx = x - mission.shore.x, dz = z - mission.shore.z;
     const px = (dx * routeZ - dz * routeX) / length;
@@ -102,14 +103,15 @@ export function bucketMinimumRimHeight(campaign: Campaign, mission: Mission, x: 
 /** Swept footprint against the hull sides; a floor correction must never lift a sea-level load through them. */
 export function bucketCrossesShipSide(from: Vec3, to: Vec3, campaign: Campaign, mission: Mission): boolean {
   const stern = campaign.id === 'jp_ketapang_2026_09' ? 40 : 35;
-  const minX = mission.ship.x - campaign.shipWidth / 2 - BUCKET_FOOTPRINT_RADIUS_M;
-  const maxX = mission.ship.x + campaign.shipWidth / 2 + BUCKET_FOOTPRINT_RADIUS_M;
-  const minZ = mission.ship.z + stern - campaign.shipLength - BUCKET_FOOTPRINT_RADIUS_M;
-  const maxZ = mission.ship.z + stern + BUCKET_FOOTPRINT_RADIUS_M;
+  const origin = shipToLocal(mission, from), destination = shipToLocal(mission, to);
+  const minX = -campaign.shipWidth / 2 - BUCKET_FOOTPRINT_RADIUS_M;
+  const maxX = campaign.shipWidth / 2 + BUCKET_FOOTPRINT_RADIUS_M;
+  const minZ = stern - campaign.shipLength - BUCKET_FOOTPRINT_RADIUS_M;
+  const maxZ = stern + BUCKET_FOOTPRINT_RADIUS_M;
   // Loads already aboard may settle vertically onto the deck.
-  if (from.x >= minX && from.x <= maxX && from.z >= minZ && from.z <= maxZ) return false;
+  if (origin.x >= minX && origin.x <= maxX && origin.z >= minZ && origin.z <= maxZ) return false;
   let enter = 0, leave = 1;
-  for (const [a, b, low, high] of [[from.x, to.x, minX, maxX], [from.z, to.z, minZ, maxZ]]) {
+  for (const [a, b, low, high] of [[origin.x, destination.x, minX, maxX], [origin.z, destination.z, minZ, maxZ]]) {
     const delta = b - a;
     if (Math.abs(delta) < 1e-9) { if (a < low || a > high) return false; continue; }
     const t0 = (low - a) / delta, t1 = (high - a) / delta;

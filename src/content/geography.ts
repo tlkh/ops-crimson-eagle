@@ -1,4 +1,6 @@
 import type { Campaign, Mission } from '../types';
+import { campaignTerrainFrame } from './terrainFrame';
+import { isWithinLakeOutline, lakeRadiusBounds } from '../sim/lakeShape';
 
 /** Local gameplay metres in the campaign's stable ship-to-inland coordinate frame. */
 export type LocalPoint = { t: number; s: number };
@@ -27,6 +29,13 @@ export interface CampaignRoad {
   readonly points: readonly LocalPoint[];
 }
 
+export interface CampaignRoadTerminus {
+  readonly roadId: string;
+  readonly kind: RoadKind;
+  readonly end: 'start' | 'end';
+  readonly position: LocalPoint;
+}
+
 export interface CampaignGeography {
   readonly settlements: readonly CampaignSettlement[];
   readonly sectors: readonly CampaignSector[];
@@ -41,46 +50,39 @@ interface LocalFrame {
 
 const distance = (a: LocalPoint, b: LocalPoint) => Math.hypot(a.t - b.t, a.s - b.s);
 
-function makeLocalFrame(mission: Mission): LocalFrame {
-  const target = mission.shore ?? mission.lake;
-  const dx = target.x - mission.ship.x;
-  const dz = target.z - mission.ship.z;
-  const routeLength = Math.max(1, Math.hypot(dx, dz));
-  const ux = dx / routeLength;
-  const uz = dz / routeLength;
-  const sx = -uz;
-  const sz = ux;
+function distanceToPolyline(point: LocalPoint, points: readonly LocalPoint[]): number {
+  let nearest = Infinity;
+  for (let index = 1; index < points.length; index++) {
+    const a = points[index - 1], b = points[index];
+    const dt = b.t - a.t, ds = b.s - a.s;
+    const lengthSquared = dt * dt + ds * ds;
+    const fraction = lengthSquared === 0
+      ? 0
+      : Math.max(0, Math.min(1, ((point.t - a.t) * dt + (point.s - a.s) * ds) / lengthSquared));
+    nearest = Math.min(nearest, distance(point, { t: a.t + dt * fraction, s: a.s + ds * fraction }));
+  }
+  return nearest;
+}
+
+function makeLocalFrame(campaign: Campaign, mission: Mission): LocalFrame {
+  const { origin, length: routeLength, ux, uz, sx, sz } = campaignTerrainFrame(campaign, mission);
   const coastStart = routeLength * .42;
   return {
     toLocal(point) {
-      const rx = point.x - mission.ship.x;
-      const rz = point.z - mission.ship.z;
+      const rx = point.x - origin.x;
+      const rz = point.z - origin.z;
       return { t: rx * ux + rz * uz, s: rx * sx + rz * sz };
     },
     fromLocal(point) {
       return {
-        x: mission.ship.x + point.t * ux + point.s * sx,
-        z: mission.ship.z + point.t * uz + point.s * sz,
+        x: origin.x + point.t * ux + point.s * sx,
+        z: origin.z + point.t * uz + point.s * sz,
       };
     },
     coastAt(s) {
       return coastStart + 34 * Math.sin(s * .003) + 19 * Math.sin(s * .008 + .5);
     },
   };
-}
-
-function closestPointOnSegment(point: LocalPoint, a: LocalPoint, b: LocalPoint): LocalPoint {
-  const dt = b.t - a.t;
-  const ds = b.s - a.s;
-  const lengthSquared = dt * dt + ds * ds;
-  const fraction = lengthSquared === 0
-    ? 0
-    : Math.max(0, Math.min(1, ((point.t - a.t) * dt + (point.s - a.s) * ds) / lengthSquared));
-  return { t: a.t + dt * fraction, s: a.s + ds * fraction };
-}
-
-function segmentDistance(point: LocalPoint, a: LocalPoint, b: LocalPoint): number {
-  return distance(point, closestPointOnSegment(point, a, b));
 }
 
 function pathIsOnLand(path: readonly LocalPoint[], frame: LocalFrame): boolean {
@@ -92,13 +94,16 @@ function pathIsOnLand(path: readonly LocalPoint[], frame: LocalFrame): boolean {
 }
 
 function pathClearsLakes(
+  campaignId: Campaign['id'],
+  frame: LocalFrame,
   path: readonly LocalPoint[],
-  lakes: readonly { center: LocalPoint; radius: number }[],
+  lakes: readonly { boundary: { x: number; z: number; radius: number } }[],
   margin: number,
 ): boolean {
-  for (let index = 1; index < path.length; index++) {
+  for (const point of sampleRoad(path, 8)) {
+    const world = frame.fromLocal(point);
     for (const lake of lakes) {
-      if (segmentDistance(lake.center, path[index - 1], path[index]) < lake.radius + margin) return false;
+      if (isWithinLakeOutline(campaignId, lake.boundary, world, margin + 4)) return false;
     }
   }
   return true;
@@ -141,14 +146,29 @@ export function sampleRoad(points: readonly LocalPoint[], spacing = 8): LocalPoi
   return samples;
 }
 
+/** Return the unshared ends of the connected road graph in stable order. */
+export function getCampaignRoadTermini(roads: readonly CampaignRoad[]): CampaignRoadTerminus[] {
+  const endpoints: Array<{ road: CampaignRoad; end: 'start' | 'end'; position: LocalPoint }> = [];
+  for (const road of roads) {
+    if (road.points.length < 2) continue;
+    for (const [end, position] of [['start', road.points[0]], ['end', road.points[road.points.length - 1]]] as const) {
+      endpoints.push({ road, end, position: { ...position } });
+    }
+  }
+  return endpoints.filter(endpoint => !roads.some(other => other.id !== endpoint.road.id
+    && distanceToPolyline(endpoint.position, other.points) <= 1.5))
+    .map(({ road, end, position }) => ({ roadId: road.id, kind: road.kind, end, position }));
+}
+
 /** Build deterministic authored settlements, sector access landmarks, and connected roads. */
 export function getCampaignGeography(campaign: Campaign): CampaignGeography {
   const referenceMission = campaign.missions[0];
   if (!referenceMission) throw new Error(`Campaign ${campaign.id} has no missions for geography`);
-  const frame = makeLocalFrame(referenceMission);
+  const frame = makeLocalFrame(campaign, referenceMission);
   const lakePositions = campaign.missions.map(mission => ({
     center: frame.toLocal(mission.lake),
-    radius: mission.lake.radius,
+    boundary: mission.lake,
+    outerRadius: lakeRadiusBounds(campaign.id, mission.lake.radius).max,
   }));
   const villageS = lakePositions[0].center.s + Math.max(520, referenceMission.lake.radius * 1.25 + 100);
   const villageT = Math.max(
@@ -235,13 +255,17 @@ export function getCampaignGeography(campaign: Campaign): CampaignGeography {
   }
 
   const accessCenter = lakePositions[0].center;
-  const accessRadius = Math.max(...lakePositions.map(lake => lake.radius)) + 120;
+  const accessRadius = Math.max(...lakePositions.map(lake => lake.outerRadius)) + 105;
   // An open, irregular feeder follows the operational sectors, then bends
   // out through the settlement edge instead of tracing a uniform lake ring.
-  const accessWaypoints = [
+  const accessWaypointSpecs: Array<[number, number]> = campaign.id === 'jp_ketapang_2026_09'
+    ? [[-82, 1.28], [-88, 1.62], [-61, 1.08], [-34, 1.52], [-4, 1.10],
+      [25, 1.72], [55, 1.16], [84, 1.55], [114, 1.06], [143, 1.40]]
+    : [
     [-112, 1.28], [-88, 1.62], [-61, 1.08], [-34, 1.52], [-4, 1.10],
     [25, 1.72], [55, 1.16], [84, 1.55], [114, 1.06], [143, 1.40],
-  ].map(([degrees, radiusScale]) => {
+  ];
+  const accessWaypoints = accessWaypointSpecs.map(([degrees, radiusScale]) => {
     const angle = degrees * Math.PI / 180;
     const radius = accessRadius * radiusScale;
     return {
@@ -249,13 +273,27 @@ export function getCampaignGeography(campaign: Campaign): CampaignGeography {
       s: accessCenter.s + Math.sin(angle) * radius,
     };
   });
-  if (!pathClearsLakes(accessWaypoints, lakePositions, 50) || !pathIsOnLand(accessWaypoints, frame)) {
+  if (campaign.id === 'jp_ketapang_2026_09') {
+    // Keep the northern feeder outside the shore-support exclusion by sweeping
+    // around the lake's west side before ending at a rural service cluster.
+    accessWaypoints.push(...[
+      [127, 1.58], [108, 1.72], [90, 1.8],
+    ].map(([degrees, radiusScale]) => {
+      const angle = degrees * Math.PI / 180;
+      const radius = accessRadius * radiusScale;
+      return {
+        t: accessCenter.t + Math.cos(angle) * radius,
+        s: accessCenter.s + Math.sin(angle) * radius,
+      };
+    }));
+  }
+  if (!pathClearsLakes(campaign.id, frame, accessWaypoints, lakePositions, 50) || !pathIsOnLand(accessWaypoints, frame)) {
     throw new Error(`Could not place the irregular sector access route for ${campaign.id}`);
   }
   const accessSpinePoints = sampleRoad(accessWaypoints, 20);
   const spineLinkJunction = accessSpinePoints
     .map(point => ({ point, path: [mainRoad[0], point] }))
-    .filter(candidate => pathClearsLakes(candidate.path, lakePositions, 50) && pathIsOnLand(candidate.path, frame))
+    .filter(candidate => pathClearsLakes(campaign.id, frame, candidate.path, lakePositions, 50) && pathIsOnLand(candidate.path, frame))
     .sort((a, b) => distance(a.point, mainRoad[0]) - distance(b.point, mainRoad[0]))[0];
   if (!spineLinkJunction) throw new Error(`Could not connect the main road to ${campaign.id} sector spine`);
   const accessSpine = accessSpinePoints;
@@ -273,10 +311,13 @@ export function getCampaignGeography(campaign: Campaign): CampaignGeography {
     const awayT = fire.t - lake.t;
     const awayS = fire.s - lake.s;
     const separation = Math.max(1, Math.hypot(awayT, awayS));
-    const position = { t: fire.t + awayT / separation * 100, s: fire.s + awayS / separation * 100 };
+    // End sector spurs at a safe roadside staging cluster beyond the fire
+    // approach corridor instead of stopping beside the active objective.
+    const terminalOffset = Math.max(340, mission.fire.radius + 260);
+    const position = { t: fire.t + awayT / separation * terminalOffset, s: fire.s + awayS / separation * terminalOffset };
     const junction = accessSpinePoints
       .map((point, index) => ({ point, index, path: [point, position] }))
-      .filter(candidate => pathClearsLakes(candidate.path, lakePositions, 50) && pathIsOnLand(candidate.path, frame))
+      .filter(candidate => pathClearsLakes(campaign.id, frame, candidate.path, lakePositions, 50) && pathIsOnLand(candidate.path, frame))
       .sort((a, b) => distance(a.point, position) - distance(b.point, position))[0];
     if (!junction) throw new Error(`Could not connect ${mission.id} sector access to the shared spine`);
     roads.push({

@@ -7,6 +7,10 @@ import type { Campaign, Mission, SimState } from './types';
 export type RadioPriority = 'hint' | 'event' | 'urgent';
 export type RadioTransmission = { id: string; priority: RadioPriority };
 
+const APPROACH_CUE_RANGE_M = 200;
+const GUIDANCE_REPEAT_SEC = 24;
+const MIN_HINT_GAP_SEC = 8;
+
 type Snapshot = {
   tick: number;
   phase: SimState['phase'];
@@ -55,27 +59,36 @@ export function guidanceVoiceCue(state: SimState, campaign: Campaign, mission: M
   const extended = state as ExtendedSimState;
   const guidance = extended.guidance;
   const action = getObjectiveAction(state, campaign, mission);
+  const speed = Math.hypot(state.velocity.x, state.velocity.z);
   if (extended.dumping) return 'water_released';
   if (extended.fetching) return 'bucket_filling';
   if (action === 'deck-rig') return 'sg_attach_deck';
   if (action === 'deck-recover') return 'sg_secure_bucket';
   if (action === 'attach') return 'jp_attach_shore';
   if (action === 'unrig') return 'jp_remove_sling';
-  if (action === 'fetch') return 'fetch_water';
-  if (action === 'release') return 'release_water';
+  if (action === 'fetch') {
+    if (state.position.y > 28) return 'lake_descend';
+    if (state.position.y < 22) return 'lake_climb';
+    if (speed > 12) return 'lake_slow';
+    return 'fetch_water';
+  }
+  if (action === 'release') {
+    if (state.position.y < 38 || state.position.y > 70) return 'fire_altitude';
+    if (speed > 3.5) return 'fire_slow';
+    return 'release_water';
+  }
   if (shouldObserveFire(state, mission)) return 'fire_cooling';
 
-  if (guidance && guidance.distanceM < 110) {
-    const speed = Math.hypot(state.velocity.x, state.velocity.z);
+  if (guidance && guidance.distanceM < APPROACH_CUE_RANGE_M) {
     if (guidance.label === 'Freshwater lake' && state.bucketAttached) {
-      if (state.position.y > 36) return 'lake_descend';
-      if (state.position.y < 15) return 'lake_climb';
       if (speed > 12) return 'lake_slow';
+      if (state.position.y > 28) return 'lake_descend';
+      if (state.position.y < 22) return 'lake_climb';
       return 'lake_align';
     }
     if (guidance.label === 'Active fire' && state.waterLitres > 0) {
-      if (state.position.y < 32 || state.position.y > 85) return 'fire_altitude';
-      if (speed > 12) return 'fire_slow';
+      if (state.position.y < 38 || state.position.y > 70) return 'fire_altitude';
+      if (speed > 3.5) return 'fire_slow';
       return 'fire_align';
     }
     if (['deck_rig', 'shore_rig', 'shore_unrig', 'land', 'return'].includes(state.phase)) {
@@ -185,8 +198,8 @@ export class MissionRadioDirector {
     }
 
     const cue = guidanceVoiceCue(state, campaign, mission);
-    if (cue && (cue !== this.lastGuidance || state.timeSec - this.lastGuidanceAt >= 30) &&
-      state.timeSec - this.lastTransmissionAt >= 7) {
+    if (cue && (cue !== this.lastGuidance || state.timeSec - this.lastGuidanceAt >= GUIDANCE_REPEAT_SEC) &&
+      state.timeSec - this.lastTransmissionAt >= MIN_HINT_GAP_SEC) {
       this.speak(cue, 'hint', state.timeSec);
     }
   }

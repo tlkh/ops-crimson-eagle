@@ -28,8 +28,11 @@ function validateMission(campaign: Campaign, mission: Mission, index: number, is
     issues.push(`${path}: title, briefing, lesson and protected objective are required.`);
   }
   if (!Number.isInteger(mission.seed) || mission.seed < 1) issues.push(`${path}: seed must be a positive integer.`);
-  if (!isFinitePoint(mission.ship) || mission.ship.x !== 0 || mission.ship.z !== 0) {
-    issues.push(`${path}: ship must be at local world origin (0, 0).`);
+  if (!isFinitePoint(mission.ship) || Math.hypot(mission.ship.x, mission.ship.z) > 30) {
+    issues.push(`${path}: ship must stay within 30 m of the fixed offshore campaign anchorage.`);
+  }
+  if (!Number.isFinite(mission.shipHeading) || Math.abs(mission.shipHeading) > .12) {
+    issues.push(`${path}: ship heading must be within 0.12 radians of the campaign alignment.`);
   }
   if (!isFinitePoint(mission.lake) || !Number.isFinite(mission.lake.radius) || mission.lake.radius <= 0) {
     issues.push(`${path}: lake point and positive radius are required.`);

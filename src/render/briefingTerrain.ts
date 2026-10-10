@@ -3,6 +3,7 @@ import type { Campaign, Mission } from '../types';
 import { createFire } from './fire';
 import { createShip } from './ships';
 import { createWorld } from './world';
+import { CAMPAIGN_TERRAIN_ORIGIN } from '../content/terrainFrame';
 
 export type BriefingTerrainFrame = {
   width: number;
@@ -37,7 +38,7 @@ export type BriefingTerrainCameraProjection = {
 
 /** Camera transform shared with projection checks; raster pixels are 2× the map model. */
 export function briefingTerrainCameraProjection(
-  mission: Mission,
+  _mission: Mission,
   frame: BriefingTerrainFrame,
 ): BriefingTerrainCameraProjection {
   const width = Math.max(1, Math.round(frame.width * CAPTURE_PIXEL_RATIO));
@@ -56,8 +57,8 @@ export function briefingTerrainCameraProjection(
     width,
     height,
     scale,
-    centerX: mission.ship.x + frame.basis.lateralX * lateralOffset + frame.basis.inlandX * inlandOffset,
-    centerZ: mission.ship.z + frame.basis.lateralZ * lateralOffset + frame.basis.inlandZ * inlandOffset,
+    centerX: CAMPAIGN_TERRAIN_ORIGIN.x + frame.basis.lateralX * lateralOffset + frame.basis.inlandX * inlandOffset,
+    centerZ: CAMPAIGN_TERRAIN_ORIGIN.z + frame.basis.lateralZ * lateralOffset + frame.basis.inlandZ * inlandOffset,
     rightX: -frame.basis.inlandZ,
     rightZ: frame.basis.inlandX,
   };

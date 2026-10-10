@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { campaigns } from '../content';
-import { getCampaignGeography, sampleRoad } from '../content/geography';
+import { getCampaignGeography, getCampaignRoadTermini, sampleRoad } from '../content/geography';
 import { renderedTerrainHeight, terrainHeight } from '../sim/collision';
 import { createCoastalSampler } from './coastalSampling';
 import { createLandUse, type LandUseContext } from './landUse';
@@ -54,6 +54,21 @@ describe('connected rural land use', () => {
       expect(first.stats.buildingCount).toBeGreaterThanOrEqual(12);
       expect(first.stats.bridgeCount).toBeGreaterThan(0);
       expect(first.stats.palmCount).toBeGreaterThan(0);
+      const unservedTermini = getCampaignRoadTermini(geography.roads).filter(terminus =>
+        geography.settlements.every(settlement => Math.hypot(
+          settlement.position.t - terminus.position.t,
+          settlement.position.s - terminus.position.s,
+        ) > 210));
+      expect(first.stats.roadEndClusterCount).toBe(unservedTermini.length);
+      for (const terminus of unservedTermini) {
+        const prefix = `Road-end ${terminus.roadId} ${terminus.end}`;
+        const buildings = first.structureColliders.filter(item => item.label.startsWith(prefix));
+        const endpoint = context.fromLocal(terminus.position.t, terminus.position.s);
+        expect(buildings, prefix).toHaveLength(2);
+        for (const building of buildings) {
+          expect(Math.hypot(building.x - endpoint.x, building.z - endpoint.z), prefix).toBeLessThanOrEqual(70);
+        }
+      }
       expect(first.treeColliders.length).toBeGreaterThan(20);
       expect(first.exclusionZones.length).toBeGreaterThan(100);
       expect(first.structureColliders.every(item => item.top > item.bottom)).toBe(true);

@@ -26,7 +26,7 @@ function brace(parent: THREE.Object3D, from: P, to: P, radius: number, material:
   return part;
 }
 // Stations [longitudinal Z, half-width, floor Y, roof Y]. Nose faces -Z.
-function loft(stations: [number, number, number, number][], material: THREE.Material, parent: THREE.Object3D, options: { uvRange?: [number,number]; frontCapUv?: [number,number,number,number]; rearCapUv?: [number,number,number,number] } = {}) {
+function loft(stations: [number, number, number, number][], material: THREE.Material, parent: THREE.Object3D, options: { uvRange?: [number,number]; frontCapUv?: [number,number,number,number]; rearCapUv?: [number,number,number,number]; openRear?: boolean } = {}) {
   const points: number[] = [], uv: number[] = [], index: number[] = [];
   const rings = 64, sides = 32, stride = sides + 1;
   for (let j = 0; j <= rings; j++) {
@@ -43,6 +43,7 @@ function loft(stations: [number, number, number, number][], material: THREE.Mate
   }
   // Separate closed end caps retain correct normals and prevent a see-through pylon.
   for (const end of [0, 1]) {
+    if (end && options.openRear) continue;
     const station = end ? stations.at(-1)! : stations[0], center = points.length / 3;
     const rect=end?options.rearCapUv:options.frontCapUv;
     const capUv=(u:number,v:number):[number,number]=>rect?[rect[0]+u*(rect[2]-rect[0]),rect[1]+v*(rect[3]-rect[1])]:[u,v];
@@ -59,6 +60,69 @@ function loft(stations: [number, number, number, number][], material: THREE.Mate
 }
 
 type Station = [number, number, number, number];
+
+// Intersect a radial line with a rounded rectangle. The aperture can use more
+// samples than the 32-sided body loft without changing the outer silhouette.
+function cargoSlotPoint(angle: number, halfWidth: number, centerY: number,
+  halfHeight: number, cornerRadius: number, z: number): P {
+  const c=Math.cos(angle), s=Math.sin(angle);
+  const side=halfWidth/Math.abs(c);
+  if (Math.abs(side*s)<=halfHeight-cornerRadius) return [side*c,centerY+side*s,z];
+  const top=halfHeight/Math.abs(s);
+  if (Math.abs(top*c)<=halfWidth-cornerRadius) return [top*c,centerY+top*s,z];
+  const cornerX=Math.sign(c)*(halfWidth-cornerRadius);
+  const cornerY=Math.sign(s)*(halfHeight-cornerRadius);
+  const projected=c*cornerX+s*cornerY;
+  const distance=projected+Math.sqrt(Math.max(0,projected**2-cornerX**2-cornerY**2+cornerRadius**2));
+  return [distance*c,centerY+distance*s,z];
+}
+
+function rearCargoOpening(parent: THREE.Object3D, end: Station,
+  skin: THREE.Material, recess: THREE.Material, sill: THREE.Material) {
+  const [frontZ, outerWidth, floor, roof]=end;
+  const count=96, bodySides=32, frontCenterY=.44, frontHalfHeight=.30;
+  const front=(angle:number)=>cargoSlotPoint(angle,.96,frontCenterY,frontHalfHeight,.16,frontZ);
+  const back=(angle:number)=>cargoSlotPoint(angle,.72,.44,.24,.13,7.60);
+  const bodyPoint=(side:number):P=>{
+    const angle=side*TAU/bodySides, c=Math.cos(angle), s=Math.sin(angle);
+    return [Math.sign(c)*Math.abs(c)**.63*outerWidth,
+      (floor+roof)/2+Math.sign(s)*Math.abs(s)**.68*(roof-floor)/2,frontZ];
+  };
+  const rimPoints:number[]=[], rimUv:number[]=[], rimIndex:number[]=[];
+  const insidePoints:number[]=[], insideIndex:number[]=[];
+  const uv=(p:P):[number,number]=>[.045+.025*p[0]/outerWidth,.22+.05*(p[1]-floor)/(roof-floor)];
+  for(let i=0;i<count;i++) {
+    const angle=i*TAU/count;
+    // Split each existing loft edge into three; the cap cannot leave tiny
+    // slivers where its denser outline meets the coarser fuselage end ring.
+    const bodyIndex=i*bodySides/count, base=Math.floor(bodyIndex), t=bodyIndex-base;
+    const a=bodyPoint(base), b=bodyPoint(base+1);
+    const outer:P=[THREE.MathUtils.lerp(a[0],b[0],t),THREE.MathUtils.lerp(a[1],b[1],t),frontZ];
+    const opening=front(angle), inside=back(angle);
+    rimPoints.push(...outer,...opening); rimUv.push(...uv(outer),...uv(opening));
+    insidePoints.push(...opening,...inside);
+    const next=(i+1)%count;
+    rimIndex.push(2*i,2*next,2*i+1,2*next,2*next+1,2*i+1);
+    insideIndex.push(2*i,2*i+1,2*next,2*next,2*i+1,2*next+1);
+  }
+  const rim=new THREE.BufferGeometry();
+  rim.setAttribute('position',new THREE.Float32BufferAttribute(rimPoints,3));
+  rim.setAttribute('uv',new THREE.Float32BufferAttribute(rimUv,2));
+  rim.setIndex(rimIndex); rim.computeVertexNormals();
+  mesh(parent,rim,skin).name='Rear cargo opening surround';
+
+  // A dark, tapered sleeve terminates in a real bulkhead. Its floor and
+  // sidewalls catch light while the rear view never sees terrain through it.
+  const centerIndex=insidePoints.length/3;
+  insidePoints.push(0,.44,7.60);
+  for(let i=0;i<count;i++) insideIndex.push(centerIndex,2*i+1,2*((i+1)%count)+1);
+  const cavity=new THREE.BufferGeometry();
+  cavity.setAttribute('position',new THREE.Float32BufferAttribute(insidePoints,3));
+  cavity.setIndex(insideIndex); cavity.computeVertexNormals();
+  mesh(parent,cavity,recess).name='Recessed rear cargo bay';
+  box(parent,[1.60,.045,.22],[0,.15,frontZ-.10],sill).name='Rear cargo sill';
+}
+
 function stationAt(stations: Station[], z: number): Station {
   let i = 0;
   while (i < stations.length - 2 && z > stations[i + 1][0]) i++;
@@ -246,11 +310,24 @@ function rotorHeadGeometry() {
   if(!result) throw new Error('Could not assemble the rotor head');
   return result;
 }
-function marking(parent: THREE.Object3D, text: string, p: P, side: number, width: number, color = '#171d19') {
+function marking(parent: THREE.Object3D, text: string, p: P, side: number, width: number,
+  color = '#171d19', fitJapanese = false) {
   const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 128;
-  const ctx = canvas.getContext('2d')!; ctx.fillStyle = color; ctx.font = '600 58px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, 512, 64, 1000);
+  const ctx = canvas.getContext('2d')!; ctx.fillStyle = color;
+  ctx.font = fitJapanese ? '600 88px Arial, sans-serif' : '600 58px Arial';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (fitJapanese) {
+    // Fit the five Japanese glyphs across the tank instead of leaving most of
+    // the 1024-pixel canvas empty around a tiny wordmark.
+    const measured = ctx.measureText(text)?.width || 1;
+    ctx.save(); ctx.translate(512,64); ctx.scale(840/measured,1);
+    ctx.fillText(text,0,0); ctx.restore();
+  } else ctx.fillText(text, 512, 64, 1000);
   const map = new THREE.CanvasTexture(canvas); map.colorSpace = THREE.SRGBColorSpace;
-  const m = mesh(parent, new THREE.PlaneGeometry(width, width / 8), new THREE.MeshBasicMaterial({ map, transparent: true, depthWrite: false, side: THREE.DoubleSide }), p);
+  const material=new THREE.MeshBasicMaterial({ map, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+  if(fitJapanese) material.name='JGSDF service lettering';
+  const m = mesh(parent, new THREE.PlaneGeometry(width, width / (fitJapanese?5.5:8)), material, p);
+  if(fitJapanese) m.name='JGSDF service lettering';
   m.rotation.y = side * Math.PI / 2; return m;
 }
 
@@ -386,15 +463,19 @@ export function createAircraft(campaign: Campaign) {
   cabinGlass.name='Chinook cabin glazing';
   const roundelWhite=japanese?mat('#e5e2cb',.8,{side:THREE.DoubleSide}):undefined;
   const roundelRed=japanese?mat('#ae3036',.8,{side:THREE.DoubleSide}):undefined;
-  // Constant-section cargo cabin, faceted chin, and a closed upswept ramp.
-  const cabinStations: Station[] = [[-7.8,.08,-.50,-.23],[-7.52,.47,-.79,.02],[-7.12,.88,-1.04,.49],[-6.67,1.19,-1.18,1.02],[-6.05,1.37,-1.32,1.43],[-5.2,1.42,-1.34,1.55],[4.6,1.42,-1.32,1.55],[6.0,1.34,-1.2,1.48],[6.8,1.16,-.97,1.35],[7.55,.91,-.61,1.17],[8.22,.70,-.31,1.03]];
+  if(roundelWhite) roundelWhite.name='JGSDF roundel white';
+  if(roundelRed) roundelRed.name='JGSDF roundel red';
+  const rearRecess=mat('#1a2421',.91,{side:THREE.DoubleSide}); rearRecess.name='Chinook rear cargo recess';
+  const rearSill=mat('#62706b',.72); rearSill.name='Chinook rear cargo sill';
+  // Constant-section cargo cabin, faceted chin, and an upswept, mostly raised ramp.
+  const cabinStations: Station[] = [[-7.8,.08,-.50,-.23],[-7.52,.47,-.79,.02],[-7.12,.88,-1.04,.49],[-6.67,1.19,-1.18,1.02],[-6.05,1.37,-1.32,1.43],[-5.2,1.42,-1.34,1.55],[4.6,1.42,-1.32,1.55],[6.0,1.34,-1.2,1.48],[6.8,1.25,-.97,1.35],[7.55,1.16,-.61,1.17],[8.22,1.10,-.31,1.03]];
   cockpitShell(solid,cabinStations,body,glass,brown);
   if (japanese) {
-    // Keep the sides camouflaged, but paint the tapered aft fuselage and
-    // closed rear cap solid green. This removes the S motif from the chase view.
+    // Keep the sides camouflaged, with a solid green aft fuselage and ramp.
     loft(cabinStations.slice(5,8),body,solid);
-    loft(cabinStations.slice(7),paint.aftSkin,solid);
-  } else loft(cabinStations.slice(5),body,solid);
+    loft(cabinStations.slice(7),paint.aftSkin,solid,{openRear:true});
+  } else loft(cabinStations.slice(5),body,solid,{openRear:true});
+  rearCargoOpening(solid,cabinStations.at(-1)!,japanese?paint.aftSkin:body,rearRecess,rearSill);
   // Short forward transmission pylon and tall aft transmission pylon are defining features.
   loft([[-6.42,.54,1.22,2.13],[-6.01,.74,1.28,2.43],[-5.45,.77,1.36,2.44],[-4.84,.65,1.42,2.17],[-4.00,.16,1.49,1.62]], body, solid,
     {frontCapUv:[.02,.075,.07,.12],rearCapUv:[.02,.22,.07,.27]});
@@ -465,9 +546,10 @@ export function createAircraft(campaign: Campaign) {
     }
     // Discreet national identifiers; no invented registration or squadron badge.
     if (japanese) {
-      tankRoundel(solid,tankStations,side,3.82,-.65,.34,.028,roundelWhite!);
-      tankRoundel(solid,tankStations,side,3.82,-.65,.265,.047,roundelRed!);
-      marking(root,'陸上自衛隊',[side*2.409,-.51,.5],side,2.1,'#c5c4a1');
+      const tankMiddleZ=(tankStations[0][0]+tankStations.at(-1)![0])/2;
+      tankRoundel(solid,tankStations,side,tankMiddleZ,-.65,.34,.028,roundelWhite!);
+      tankRoundel(solid,tankStations,side,tankMiddleZ,-.65,.265,.047,roundelRed!);
+      marking(root,'陸上自衛隊',[side*2.409,-.51,-1.1],side,2.1,'#c5c4a1',true);
     } else marking(root,'REPUBLIC OF SINGAPORE AIR FORCE',[side*2.409,-.56,.25],side,5.5);
   }
   // The weather-radar housing tapers into the sloping chin instead of sitting
@@ -477,8 +559,7 @@ export function createAircraft(campaign: Campaign) {
     ellipsoid(solid,[.21,.22,.22],[0,-1.18,-6.96],olive);
     ellipsoid(solid,[.115,.11,.10],[0,-1.24,-7.14],cabinGlass);
   }
-  // The body loft itself forms the closed upswept ramp; no offset flap or
-  // freestanding edge pieces project beyond its tapered silhouette.
+  // The body loft forms the raised, upswept lower ramp below the slot.
   // The low synchronising-shaft fairing above already defines the cabin roof.
   // Unreferenced tall rods and the round roof lump obscured the JGSDF silhouette.
   cylinder(solid,.12,.34,[0,-1.52,0],metal);

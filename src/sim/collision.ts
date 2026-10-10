@@ -1,4 +1,5 @@
 import type { Campaign, Mission } from '../types';
+import { campaignTerrainFrame } from '../content/terrainFrame';
 
 type Point = { x: number; z: number };
 export type TreeCollider = { x: number; z: number; ground: number; height: number; radius: number };
@@ -52,12 +53,9 @@ export function structureColliders(mission: Mission): readonly StructureCollider
 
 /** Matches the height field used by createWorld before its grid is triangulated. */
 export function terrainHeight(campaign: Campaign, mission: Mission, x: number, z: number): number | null {
-  const target = mission.shore ?? mission.lake;
-  const dx = target.x - mission.ship.x, dz = target.z - mission.ship.z;
-  const routeLength = Math.max(1, Math.hypot(dx, dz));
-  const ux = dx / routeLength, uz = dz / routeLength, sx = -uz, sz = ux;
-  const t = (x - mission.ship.x) * ux + (z - mission.ship.z) * uz;
-  const s = (x - mission.ship.x) * sx + (z - mission.ship.z) * sz;
+  const { origin, length: routeLength, ux, uz, sx, sz } = campaignTerrainFrame(campaign, mission);
+  const t = (x - origin.x) * ux + (z - origin.z) * uz;
+  const s = (x - origin.x) * sx + (z - origin.z) * sz;
   const coast = routeLength * .42;
   const coastAt = coast + 34 * Math.sin(s * .003) + 19 * Math.sin(s * .008 + .5);
   // The visual mesh occupies only this theatre, with ocean outside its coastline.
@@ -108,12 +106,9 @@ export function setRenderedTerrainHeights(mission: Mission, heights: readonly nu
 
 /** Exact triangle-interpolated elevation of the displayed terrain mesh. */
 export function renderedTerrainHeight(campaign: Campaign, mission: Mission, x: number, z: number): number | null {
-  const target = mission.shore ?? mission.lake;
-  const dx = target.x - mission.ship.x, dz = target.z - mission.ship.z;
-  const length = Math.max(1, Math.hypot(dx, dz));
-  const ux = dx / length, uz = dz / length, sx = -uz, sz = ux;
-  const t = (x - mission.ship.x) * ux + (z - mission.ship.z) * uz;
-  const s = (x - mission.ship.x) * sx + (z - mission.ship.z) * sz;
+  const { origin, length, ux, uz, sx, sz } = campaignTerrainFrame(campaign, mission);
+  const t = (x - origin.x) * ux + (z - origin.z) * uz;
+  const s = (x - origin.x) * sx + (z - origin.z) * sz;
   const { cols: COLS, rows: ROWS, lateral: LATERAL, inland: INLAND } = TERRAIN_GRID;
   if (s < -LATERAL || s > LATERAL || t > INLAND) return null;
   const coast = length * .42;
@@ -134,8 +129,8 @@ export function renderedTerrainHeight(campaign: Campaign, mission: Mission, x: n
       const rowCoast = coastAt(rowS);
       for (let k = 0; k <= COLS; k++) {
         const rowT = rowCoast + k / COLS * (INLAND - rowCoast);
-        const worldX = mission.ship.x + rowT * ux + rowS * sx;
-        const worldZ = mission.ship.z + rowT * uz + rowS * sz;
+        const worldX = origin.x + rowT * ux + rowS * sx;
+        const worldZ = origin.z + rowT * uz + rowS * sz;
         heights[j * (COLS + 1) + k] = terrainHeight(campaign, mission, worldX, worldZ) ?? -9;
       }
     }

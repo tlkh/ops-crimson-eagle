@@ -1,4 +1,5 @@
-import { shipLandingPoint } from '../sim/shipLanding';
+import { shipLandingLocalZ, shipLandingPoint } from '../sim/shipLanding';
+import { campaignTerrainAnchor } from '../content/terrainFrame';
 import * as THREE from 'three';
 import type { Campaign, Mission, SimState } from '../types';
 import { updateAircraftLightEmission, type AircraftLightMounts } from './aircraftLighting';
@@ -65,7 +66,7 @@ export function createNightLighting(
   const shipLength = campaign.shipLength;
   const shipWidth = campaign.shipWidth;
   const shipStation = (fraction: number) => stern - shipLength + fraction * shipLength;
-  const landingZ = shipLandingPoint(campaign, mission).z;
+  const landingPoint = shipLandingPoint(campaign, mission);
 
   const fixtures: EmissiveFixtures = {
     red: emissiveMaterial('#ff2029'),
@@ -109,7 +110,7 @@ export function createNightLighting(
   aircraftAnchor.add(landingSpot, landingSpot.target);
   ownedObjects.push(landingSpot, landingSpot.target);
 
-  const shipGroup = makeLightGroup(mission.ship);
+  const shipGroup = makeLightGroup(mission.ship, mission.shipHeading);
   scene.add(shipGroup);
   fixtureGroups.push(shipGroup);
   ownedObjects.push(shipGroup);
@@ -119,7 +120,7 @@ export function createNightLighting(
   const bridgeWing = japanese ? shipWidth * 0.19 : shipWidth * 0.37;
   const bridgeFlood = new THREE.SpotLight('#ffe6bd', 0, 175, 0.78, 0.66, 2);
   bridgeFlood.position.set(bridgeX + bridgeWing, bridgeTop, bridgeZ - (japanese ? 0 : 5));
-  bridgeFlood.target.position.set(0, DECK_Y + 0.18, landingZ - mission.ship.z);
+  bridgeFlood.target.position.set(0, DECK_Y + 0.18, shipLandingLocalZ(campaign));
   shipGroup.add(bridgeFlood, bridgeFlood.target);
   ownedObjects.push(bridgeFlood, bridgeFlood.target);
 
@@ -138,8 +139,9 @@ export function createNightLighting(
   addLens(shipGroup, fixtures.green, shipWidth * 0.47, -0.15, bowZ, 0.16);
 
   const routeTarget = mission.shore ?? mission.lake;
-  const routeX = routeTarget.x - mission.ship.x;
-  const routeZ = routeTarget.z - mission.ship.z;
+  const origin = campaignTerrainAnchor(campaign);
+  const routeX = routeTarget.x - origin.x;
+  const routeZ = routeTarget.z - origin.z;
   const routeLength = Math.max(1, Math.hypot(routeX, routeZ));
   const ux = routeX / routeLength;
   const uz = routeZ / routeLength;
@@ -163,15 +165,15 @@ export function createNightLighting(
 
   // Match world.ts's route-frame settlement placement so the warm practical
   // falls across the authored row of raised homes rather than the map marker.
-  const lakeDx = mission.lake.x - mission.ship.x;
-  const lakeDz = mission.lake.z - mission.ship.z;
+  const lakeDx = mission.lake.x - origin.x;
+  const lakeDz = mission.lake.z - origin.z;
   const lakeT = lakeDx * ux + lakeDz * uz;
   const lakeS = lakeDx * sx + lakeDz * sz;
   const settlementT = lakeT + 25;
   const settlementS = lakeS + mission.lake.radius * 1.2 + 65;
   const settlementAnchor = {
-    x: mission.ship.x + settlementT * ux + settlementS * sx,
-    z: mission.ship.z + settlementT * uz + settlementS * sz,
+    x: origin.x + settlementT * ux + settlementS * sx,
+    z: origin.z + settlementT * uz + settlementS * sz,
   };
   const settlementGroup = makeLightGroup(settlementAnchor, shoreAngle);
   scene.add(settlementGroup);
@@ -260,9 +262,9 @@ export function createNightLighting(
       landingSpot.target.position.copy(landingPosition).addScaledVector(landingDirection, Math.max(downRange, forwardRange));
       landingSpot.intensity = night * 14_000;
 
-      const nearShip = Math.hypot(state.position.x - mission.ship.x, state.position.z - landingZ) < 105;
+      const nearShip = Math.hypot(state.position.x - landingPoint.x, state.position.z - landingPoint.z) < 105;
       const shoreX = mission.shore?.x ?? mission.ship.x;
-      const shoreZ = mission.shore?.z ?? landingZ;
+      const shoreZ = mission.shore?.z ?? landingPoint.z;
       const nearShore = hasShore && Math.hypot(state.position.x - shoreX, state.position.z - shoreZ) < 105;
       const landingPhase = state.phase === 'prepare' || state.phase === 'return' || state.phase === 'land' ||
         state.phase === 'shore_rig' || state.phase === 'shore_unrig' || state.phase === 'deck_rig';

@@ -2,18 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { campaigns } from '../content';
 import type { Mission } from '../types';
 import { renderedTerrainHeight, setRenderedTerrainHeights, TERRAIN_GRID, terrainHeight } from './collision';
+import { CAMPAIGN_TERRAIN_ORIGIN } from '../content/terrainFrame';
 
 function localPoint(mission: Mission, t: number, s: number) {
   const target = mission.shore ?? mission.lake;
-  const dx = target.x - mission.ship.x, dz = target.z - mission.ship.z;
+  const dx = target.x - CAMPAIGN_TERRAIN_ORIGIN.x, dz = target.z - CAMPAIGN_TERRAIN_ORIGIN.z;
   const length = Math.max(1, Math.hypot(dx, dz));
   const ux = dx / length, uz = dz / length, sx = -uz, sz = ux;
-  return { x: mission.ship.x + t * ux + s * sx, z: mission.ship.z + t * uz + s * sz };
+  return { x: CAMPAIGN_TERRAIN_ORIGIN.x + t * ux + s * sx, z: CAMPAIGN_TERRAIN_ORIGIN.z + t * uz + s * sz };
 }
 
 function coastAt(mission: Mission, s: number) {
   const target = mission.shore ?? mission.lake;
-  const routeLength = Math.max(1, Math.hypot(target.x - mission.ship.x, target.z - mission.ship.z));
+  const routeLength = Math.max(1, Math.hypot(target.x - CAMPAIGN_TERRAIN_ORIGIN.x, target.z - CAMPAIGN_TERRAIN_ORIGIN.z));
   const coast = routeLength * .42;
   return coast + 34 * Math.sin(s * .003) + 19 * Math.sin(s * .008 + .5);
 }
@@ -37,7 +38,7 @@ describe('shared terrain field', () => {
 
     for (const campaign of campaigns) for (const mission of campaign.missions) {
       const target = mission.shore ?? mission.lake;
-      const routeLength = Math.hypot(target.x - mission.ship.x, target.z - mission.ship.z);
+      const routeLength = Math.hypot(target.x - CAMPAIGN_TERRAIN_ORIGIN.x, target.z - CAMPAIGN_TERRAIN_ORIGIN.z);
       const routePoint = localPoint(mission, routeLength * .72, 0);
       expect(terrainHeight(campaign, mission, routePoint.x, routePoint.z), `${campaign.id}/${mission.id} route`).not.toBeNull();
       expect(terrainHeight(campaign, mission, routePoint.x, routePoint.z)!).toBeLessThan(1);
@@ -53,7 +54,7 @@ describe('shared terrain field', () => {
     for (const campaign of campaigns) {
       const mission = campaign.missions[0];
       const target = mission.shore ?? mission.lake;
-      const routeLength = Math.hypot(target.x - mission.ship.x, target.z - mission.ship.z);
+      const routeLength = Math.hypot(target.x - CAMPAIGN_TERRAIN_ORIGIN.x, target.z - CAMPAIGN_TERRAIN_ORIGIN.z);
       const coast = routeLength * .42;
       const s = 700;
       const shorePoint = localPoint(mission, coastAt(mission, s) - 2, s);
@@ -74,7 +75,7 @@ describe('shared terrain field', () => {
     for (const campaign of campaigns) {
       const mission = campaign.missions[0];
       const target = mission.shore ?? mission.lake;
-      const routeLength = Math.hypot(target.x - mission.ship.x, target.z - mission.ship.z);
+      const routeLength = Math.hypot(target.x - CAMPAIGN_TERRAIN_ORIGIN.x, target.z - CAMPAIGN_TERRAIN_ORIGIN.z);
       const coast = routeLength * .42;
       const heights: number[] = [];
       for (let t = Math.max(coast + 800, 1400); t <= 6200; t += 320) {

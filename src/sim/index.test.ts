@@ -6,6 +6,8 @@ import { renderedTerrainHeight, setStructureColliders, setTreeColliders, terrain
 import { BUCKET_BODY_HEIGHT_M, BUCKET_LIFT_OFFSET_M, SLING_LENGTH_M,
   LAKE_SURFACE_M, bucketMinimumRimHeight, bucketSurfaceHeight, getBucketHook, isBucketTouchingLake } from './bucket';
 import { shipLandingPoint } from './shipLanding';
+import { shipToLocal, shipToWorld } from './shipLanding';
+import { campaigns } from '../content';
 
 const noInput: FlightCommand = {
   yaw: 0,
@@ -28,6 +30,7 @@ function makeFixture(japan = false): { campaign: Campaign; mission: Mission } {
     lesson: 'Fly, fill, drop, recover',
     seed: 41,
     ship: { x: 0, z: 0, label: 'Ship' },
+    shipHeading: 0,
     shore: { x: 200, z: 0, label: 'Handling site' },
     lake: { x: 0, z: 200, label: 'Lake', radius: 55 },
     fire: { x: 0, z: 215, label: 'Fire', radius: 60 },
@@ -724,4 +727,23 @@ it('stops a sea-level bucket at the hull instead of snapping it up onto the deck
   expect(state.precisionAction).toBeNull();
   expect(getObjectiveAction(state, campaign, mission)).not.toBe('deck-recover');
   expect(state.message).toContain('Raise the bucket above the flight deck');
+});
+
+it('aligns authored ship spawn and rail contact with each rotated deck', () => {
+  for (const campaign of campaigns) for (const mission of campaign.missions) {
+    const state = createSim(campaign, mission) as ExtendedSimState;
+    const landing = shipLandingPoint(campaign, mission);
+    expect(state.position).toEqual(landing);
+    expect(shipToLocal(mission, landing).z).toBeCloseTo(campaign.id === 'jp_ketapang_2026_09' ? 20 : 17, 6);
+    expect(state.heading).toBeCloseTo(Math.PI + mission.shipHeading, 6);
+
+    const outsideRail = shipToWorld(mission, {
+      x: campaign.shipWidth / 2 + 1.5,
+      z: campaign.id === 'jp_ketapang_2026_09' ? 20 : 17,
+    });
+    state.position = { ...outsideRail, y: 0 };
+    stepSim(state, noInput, campaign, mission);
+    expect(state.failureCause, `${mission.id} rotated rail`).toBe('collision');
+    expect(state.message).toContain(`${campaign.shipName} impact`);
+  }
 });

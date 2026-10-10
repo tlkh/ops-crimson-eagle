@@ -4,7 +4,7 @@ import type { ExtendedSimState } from './types';
 import { nearbyTrees, renderedTerrainHeight, structureColliders, terrainHeight } from './collision';
 import { BUCKET_BODY_HEIGHT_M, BUCKET_FLOAT_RIM_M, BUCKET_HOOK_OFFSET_M, BUCKET_LIFT_OFFSET_M,
   SLING_LENGTH_M, bucketReadyForDeckRecovery, bucketCrossesShipSide, bucketMinimumRimHeight, bucketSurfaceHeight, getBucketHook, isBucketTouchingLake } from './bucket';
-import { shipLandingLocalZ, shipLandingPoint } from './shipLanding';
+import { shipLandingLocalZ, shipLandingPoint, shipToLocal, shipToWorld } from './shipLanding';
 import { WORLD_REVISION } from '../worldRevision';
 import { isWithinLakeOutline } from './lakeShape';
 
@@ -61,8 +61,10 @@ function handlingPoint(campaign: Campaign, mission: Mission): Vec3 {
 function bucketStagingPoint(campaign: Campaign, mission: Mission, location: 'ship' | 'shore'): Vec3 {
   const site = location === 'shore' ? handlingPoint(campaign, mission) : shipLandingPoint(campaign, mission);
   // Ground crews stage the load beside the fuselage, clear of the landing gear.
-  const x = site.x + 6;
-  return { x, y: bucketMinimumRimHeight(campaign, mission, x, site.z), z: site.z };
+  const point = location === 'ship'
+    ? shipToWorld(mission, { x: 6, z: shipLandingLocalZ(campaign) })
+    : { x: site.x + 6, z: site.z };
+  return { ...point, y: bucketMinimumRimHeight(campaign, mission, point.x, point.z) };
 }
 
 function effectiveBurnKgPerMin(state: SimState): number {
@@ -139,12 +141,12 @@ function setMessage(state: ExtendedSimState, message: string, seconds = 3): void
 }
 
 function shipContact(state: SimState, campaign: Campaign, mission: Mission): boolean {
-  const landingPoint = shipLandingPoint(campaign, mission);
-  const dx = Math.abs(state.position.x - landingPoint.x);
-  const dz = Math.abs(state.position.z - landingPoint.z);
+  const local = shipToLocal(mission, state.position);
+  const dx = Math.abs(local.x);
+  const dz = Math.abs(local.z - shipLandingLocalZ(campaign));
   const halfLength = clamp(campaign.shipLength * 0.22, 18, 42);
   const halfWidth = Math.max(7, campaign.shipWidth / 2 - 1.4);
-  // Ship geometry runs lengthwise along world Z, with its beam along X.
+  // Compare against the rotated deck's beam and longitudinal landing lane.
   return (isJapan(campaign) || !state.bucketAttached || (bucketReadyForDeckRecovery(state, campaign, mission) && Math.hypot(dx, dz) <= 5)) &&
     dx <= halfWidth && dz <= halfLength && state.position.y <= 2.2 &&
     Math.hypot(state.velocity.x, state.velocity.z) <= 2.5 && Math.abs(state.velocity.y) <= 1.2;
@@ -170,7 +172,7 @@ function makeInitialState(campaign: Campaign, mission: Mission): ExtendedSimStat
     velocity: { x: 0, y: 0, z: 0 },
     // The authored route runs toward +Z; the rendered Chinook points along
     // local -Z, so a half-turn puts its nose toward the first waypoint.
-    heading: Math.PI,
+    heading: Math.PI + mission.shipHeading,
     bank: 0,
     pitch: 0,
     bucket: bucketStagingPoint(campaign, mission, japanese ? 'shore' : 'ship'),
@@ -838,13 +840,15 @@ function groundContactHeight(state: SimState, campaign: Campaign, mission: Missi
 function rotorHitsBox(
   state: SimState,
   box: { x: number; z: number; halfWidth: number; halfLength: number; bottom: number; top: number },
+  ship?: Mission,
 ): boolean {
   const verticalSweep = 9.15 * Math.hypot(Math.sin(state.bank), Math.sin(state.pitch));
   for (const [rotorZ, rotorY] of [[-5.7, 2.73], [6.15, 3.18]]) {
     const x = state.position.x + Math.sin(state.heading) * rotorZ;
     const z = state.position.z + Math.cos(state.heading) * rotorZ;
-    const dx = Math.max(0, Math.abs(x - box.x) - box.halfWidth);
-    const dz = Math.max(0, Math.abs(z - box.z) - box.halfLength);
+    const point = ship ? shipToLocal(ship, { x, z }) : { x, z };
+    const dx = Math.max(0, Math.abs(point.x - box.x) - box.halfWidth);
+    const dz = Math.max(0, Math.abs(point.z - box.z) - box.halfLength);
     const y = state.position.y + rotorY * Math.cos(state.bank) * Math.cos(state.pitch) + rotorZ * Math.sin(state.pitch);
     if (Math.hypot(dx, dz) <= 9.15 && y + verticalSweep >= box.bottom && y - verticalSweep <= box.top) return true;
   }
@@ -852,8 +856,7 @@ function rotorHitsBox(
 }
 
 function shipCollision(state: ExtendedSimState, campaign: Campaign, mission: Mission): string | null {
-  const x = state.position.x - mission.ship.x;
-  const z = state.position.z - mission.ship.z;
+  const { x, z } = shipToLocal(mission, state.position);
   const japanese = isJapan(campaign);
   const stern = japanese ? 40 : 35;
   const length = campaign.shipLength;
@@ -888,9 +891,9 @@ function shipCollision(state: ExtendedSimState, campaign: Campaign, mission: Mis
     const bodyHit = Math.abs(x - volume.x) <= volume.hw + 2.7 && Math.abs(z - volume.z) <= volume.hl + 8.2 &&
       state.position.y - 1.5 <= volume.top && state.position.y + 3.2 >= -2.55;
     const rotorHit = rotorHitsBox(state, {
-      x: mission.ship.x + volume.x, z: mission.ship.z + volume.z,
+      x: volume.x, z: volume.z,
       halfWidth: volume.hw, halfLength: volume.hl, bottom: -2.55, top: volume.top,
-    });
+    }, mission);
     if (bodyHit || rotorHit) return `${campaign.shipName} superstructure strike`;
   }
   // Hull/deck: do not confuse deliberate, slow contact with an impact.
@@ -904,8 +907,9 @@ function shipCollision(state: ExtendedSimState, campaign: Campaign, mission: Mis
       [-1.56, 5.8, -2.52], [1.56, 5.8, -2.52],
       [0, -7.7, -1.45], [0, 8.2, -1.2],
     ]) {
-      const sampleX = x + localX * Math.cos(state.heading) + localZ * Math.sin(state.heading);
-      const sampleZ = z - localX * Math.sin(state.heading) + localZ * Math.cos(state.heading);
+      const relativeHeading = state.heading - mission.shipHeading;
+      const sampleX = x + localX * Math.cos(relativeHeading) + localZ * Math.sin(relativeHeading);
+      const sampleZ = z - localX * Math.sin(relativeHeading) + localZ * Math.cos(relativeHeading);
       const fraction = (sampleZ - (stern - length)) / length;
       if (fraction < 0 || fraction >= .29) continue;
       const end = stations.findIndex(([f]) => f > fraction);

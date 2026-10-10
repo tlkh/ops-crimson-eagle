@@ -4,6 +4,7 @@ import type { ExtendedSimState } from '../sim/types';
 import { bucketSurfaceHeight, LAKE_SURFACE_M } from '../sim/bucket';
 import { createCoastalSampler } from './coastalSampling';
 import { evaluateTimeOfDay } from './timeOfDay';
+import { shipToLocal } from '../sim/shipLanding';
 
 const PARTICLE_CAPACITY = 128;
 const PHONE_PARTICLE_CAPACITY = 64;
@@ -105,8 +106,7 @@ function createParticleMaterial(): THREE.ShaderMaterial {
 }
 
 function inDeckBounds(campaign: Campaign, mission: Mission, x: number, z: number): boolean {
-  const localX = x - mission.ship.x;
-  const localZ = z - mission.ship.z;
+  const { x: localX, z: localZ } = shipToLocal(mission, { x, z });
   const stern = campaign.id === 'jp_ketapang_2026_09' ? 40 : 35;
   return Math.abs(localX) <= campaign.shipWidth / 2 &&
     localZ >= stern - campaign.shipLength && localZ <= stern;

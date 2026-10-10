@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { campaigns } from './content';
 import { createSim } from './sim';
+import { shipLandingPoint } from './sim/shipLanding';
 import type { ExtendedSimState } from './sim/types';
 import { guidanceVoiceCue, MissionRadioDirector, type RadioTransmission } from './missionRadio';
 
@@ -25,6 +26,7 @@ describe('mission radio guidance', () => {
     state.velocity.x = 15;
     expect(guidanceVoiceCue(state, singapore, mission)).toBe('lake_slow');
     state.velocity.x = 0;
+    state.position.y = 25;
     expect(guidanceVoiceCue(state, singapore, mission)).toBe('lake_align');
     state.guidance.label = 'Active fire';
     state.waterLitres = 5000;
@@ -63,6 +65,37 @@ describe('mission radio guidance', () => {
 
     state.tick++;
     state.timeSec += 1;
+    director.update(state, singapore, mission);
+    expect(heard).toHaveLength(3);
+  });
+
+  it('gives early numeric hover guidance, repeats it, and spaces changing hints', () => {
+    const mission = singapore.missions[0];
+    const state = createSim(singapore, mission) as ExtendedSimState;
+    state.phase = 'work';
+    state.bucketAttached = true;
+    state.position = { x: mission.lake.x, y: 45, z: mission.lake.z - 180 };
+    state.guidance = { label: 'Freshwater lake', target: { ...mission.lake, y: 25 }, distanceM: 180 };
+    const heard: RadioTransmission[] = [];
+    const director = new MissionRadioDirector(cue => heard.push(cue));
+    director.reset(state, singapore, mission);
+    expect(heard.at(-1)?.id).toBe('lake_descend');
+    const updateAt = (time: number) => {
+      state.tick++;
+      state.timeSec = time;
+      director.update(state, singapore, mission);
+    };
+    updateAt(23);
+    expect(heard).toHaveLength(1);
+    updateAt(24);
+    expect(heard.at(-1)).toEqual({ id: 'lake_descend', priority: 'hint' });
+    expect(heard).toHaveLength(2);
+    state.position.y = 25;
+    updateAt(25);
+    expect(heard).toHaveLength(2);
+    updateAt(32);
+    expect(heard.at(-1)?.id).toBe('lake_align');
+    expect(heard).toHaveLength(3);
     director.update(state, singapore, mission);
     expect(heard).toHaveLength(3);
   });
@@ -165,7 +198,7 @@ it('does not announce descent until the Singapore load and aircraft are over the
   const state = createSim(singapore, mission) as ExtendedSimState;
   state.phase = 'return';
   state.bucketAttached = true;
-  state.position = { x: mission.ship.x, y: 40, z: mission.ship.z + 17 };
+  state.position = { ...shipLandingPoint(singapore, mission), y: 40 };
   state.guidance = { label: singapore.shipName, target: { ...state.position, y: 0 }, distanceM: 0 };
   state.bucket = { x: mission.ship.x + singapore.shipWidth, y: -7.52, z: state.position.z };
   expect(guidanceVoiceCue(state, singapore, mission)).toBe('sg_return_ship');

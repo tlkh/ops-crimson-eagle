@@ -121,8 +121,8 @@ describe('coastal detail generation', () => {
     const scenery = createDistantScenery(scene, campaign, mission);
     const root = scene.children.find(child => child.name === 'Distant scenery') as THREE.Group | undefined;
     expect(root).toBeDefined();
-    expect(root?.position.x).toBe(mission.ship.x);
-    expect(root?.position.z).toBe(mission.ship.z);
+    expect(root?.position.x).toBe(0);
+    expect(root?.position.z).toBe(0);
     const japanese = campaign.id === 'jp_ketapang_2026_09';
     expect(root?.children.map(child => child.name)).toEqual(japanese
       ? ['Low inland ridge', 'Hazed inland ridge', 'Ketapang port horizon']

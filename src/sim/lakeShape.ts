@@ -4,7 +4,7 @@ export type LakePoint = { x: number; z: number };
 export type LakeBoundary = LakePoint & { radius: number };
 export type LakeHarmonic = readonly [cosine: number, sine: number];
 export type LakeShapeProfile = {
-  /** Mean radial scale; the harmonics create campaign-specific inlets and lobes. */
+  /** Mean radial scale; the harmonics create campaign-specific coves and unequal lobes. */
   readonly base: number;
   /** Cosine/sine coefficients for harmonics one through four. */
   readonly harmonics: readonly [LakeHarmonic, LakeHarmonic, LakeHarmonic, LakeHarmonic];
@@ -12,21 +12,21 @@ export type LakeShapeProfile = {
 
 const profiles: Record<CampaignId, LakeShapeProfile> = {
   sg_fictional_2026_10: {
-    base: 1.08,
+    base: 1.1483404909,
     harmonics: [
-      [.060, .0075],
-      [.030, -.0045],
-      [.0525, .003],
-      [.015, -.0075],
+      [0.0185425614, 0.0046356403],
+      [0.0166883052, -0.0185425614],
+      [0.1390692102, 0.0463564034],
+      [0.0370851227, -0.0185425614],
     ],
   },
   jp_ketapang_2026_09: {
-    base: 1.08,
+    base: 1.1590138037,
     harmonics: [
-      [.0305, .0404],
-      [.003, .0252],
-      [-.0341, .0278],
-      [-.0129, .0055],
+      [-0.0248459068, 0.0397534509],
+      [0.0149075441, 0.0397534509],
+      [-0.1341678968, 0.0894452646],
+      [0.0149075441, 0.0645993577],
     ],
   },
 };
@@ -35,13 +35,17 @@ export function lakeShapeProfile(campaignId: CampaignId): LakeShapeProfile {
   return profiles[campaignId];
 }
 
-/** Conservative radius bounds around the full authored refill disc and broad shoreline lobes. */
+/** Conservative radius bounds around the full refill disc and campaign-specific shoreline. */
 export function lakeRadiusBounds(campaignId: CampaignId, refillRadius: number): { min: number; max: number } {
-  const profile = lakeShapeProfile(campaignId);
-  const amplitude = profile.harmonics.reduce((sum, [cosine, sine]) => sum + Math.abs(cosine) + Math.abs(sine), 0);
+  let maxFactor = 1;
+  const samples = 1440;
+  for (let index = 0; index < samples; index++) {
+    maxFactor = Math.max(maxFactor, lakeRadiusFactor(campaignId, index / samples * Math.PI * 2));
+  }
   return {
-    min: refillRadius * Math.max(1, profile.base - amplitude),
-    max: refillRadius * (profile.base + amplitude),
+    min: refillRadius,
+    // A small outward allowance accounts for maxima between angular samples.
+    max: refillRadius * (maxFactor + .0002),
   };
 }
 

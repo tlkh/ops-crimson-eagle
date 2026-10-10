@@ -1,6 +1,7 @@
 import type { Campaign, Mission } from '../types';
 import { terrainHeight } from '../sim/collision';
 import { lakeOutlinePoints, lakeRadiusBounds } from '../sim/lakeShape';
+import { CAMPAIGN_TERRAIN_ORIGIN, campaignTerrainFrame } from '../content/terrainFrame';
 
 export const BRIEFING_MAP_WIDTH = 480;
 export const BRIEFING_MAP_HEIGHT = 600;
@@ -39,9 +40,9 @@ const MAP_BOTTOM_PADDING = 38;
 const LABEL_MARGIN = 10;
 const LABEL_GAP = 6;
 
-function localPoint(point: WorldPoint, mission: Mission, basis: BriefingMapModel['basis']): LocalPoint {
-  const dx = point.x - mission.ship.x;
-  const dz = point.z - mission.ship.z;
+function localPoint(point: WorldPoint, basis: BriefingMapModel['basis']): LocalPoint {
+  const dx = point.x - CAMPAIGN_TERRAIN_ORIGIN.x;
+  const dz = point.z - CAMPAIGN_TERRAIN_ORIGIN.z;
   return {
     cross: dx * basis.lateralX + dz * basis.lateralZ,
     along: dx * basis.inlandX + dz * basis.inlandZ,
@@ -49,8 +50,8 @@ function localPoint(point: WorldPoint, mission: Mission, basis: BriefingMapModel
 }
 
 /** Project a local gameplay coordinate into the fixed, uniformly scaled map viewBox. */
-export function projectBriefingMapCoordinate(model: BriefingMapModel, mission: Mission, point: WorldPoint): BriefingMapPoint {
-  const local = localPoint(point, mission, model.basis);
+export function projectBriefingMapCoordinate(model: BriefingMapModel, _mission: Mission, point: WorldPoint): BriefingMapPoint {
+  const local = localPoint(point, model.basis);
   return { x: model.origin.x + local.cross * model.scale, y: model.origin.y - local.along * model.scale };
 }
 
@@ -70,8 +71,8 @@ function createTerrainGrid(campaign: Campaign, mission: Mission, basis: Briefing
     const along = bounds.minAlong + (row + 0.5) * rowStep;
     for (let column = 0; column < columns; column++) {
       const cross = bounds.minCross + (column + 0.5) * columnStep;
-      const worldX = mission.ship.x + basis.lateralX * cross + basis.inlandX * along;
-      const worldZ = mission.ship.z + basis.lateralZ * cross + basis.inlandZ * along;
+      const worldX = CAMPAIGN_TERRAIN_ORIGIN.x + basis.lateralX * cross + basis.inlandX * along;
+      const worldZ = CAMPAIGN_TERRAIN_ORIGIN.z + basis.lateralZ * cross + basis.inlandZ * along;
       land.push(terrainHeight(campaign, mission, worldX, worldZ) !== null);
     }
   }
@@ -170,12 +171,7 @@ function placeLabels(markers: MarkerLayout[]): BriefingMapLabel[] {
 
 /** Build the renderer-independent geometry and sampled terrain for a briefing map. */
 export function buildBriefingMapModel(campaign: Campaign, mission: Mission): BriefingMapModel {
-  const inlandPoint = mission.shore ?? mission.lake;
-  const dx = inlandPoint.x - mission.ship.x;
-  const dz = inlandPoint.z - mission.ship.z;
-  const length = Math.max(1, Math.hypot(dx, dz));
-  const inlandX = dx / length;
-  const inlandZ = dz / length;
+  const { ux: inlandX, uz: inlandZ } = campaignTerrainFrame(campaign, mission);
   const basis = { inlandX, inlandZ, lateralX: -inlandZ, lateralZ: inlandX };
   const lakeOuterRadius = lakeRadiusBounds(campaign.id, mission.lake.radius).max;
   const definitions: { key: BriefingMapLabel['marker']; text: string; world: WorldPoint; worldRadius: number }[] = [
@@ -184,7 +180,7 @@ export function buildBriefingMapModel(campaign: Campaign, mission: Mission): Bri
     { key: 'lake', text: 'LAKE', world: mission.lake, worldRadius: lakeOuterRadius },
     { key: 'fire', text: 'FIRE', world: mission.fire, worldRadius: mission.fire.radius },
   ];
-  const local = definitions.map((item) => ({ ...item, point: localPoint(item.world, mission, basis) }));
+  const local = definitions.map((item) => ({ ...item, point: localPoint(item.world, basis) }));
   const minCross = Math.min(...local.map(({ point, worldRadius }) => point.cross - worldRadius));
   const maxCross = Math.max(...local.map(({ point, worldRadius }) => point.cross + worldRadius));
   const minAlong = Math.min(...local.map(({ point, worldRadius }) => point.along - worldRadius));
@@ -208,7 +204,7 @@ export function buildBriefingMapModel(campaign: Campaign, mission: Mission): Bri
     y: BRIEFING_MAP_HEIGHT - MAP_BOTTOM_PADDING,
   };
   const projected = (point: WorldPoint): BriefingMapPoint => {
-    const pointLocal = localPoint(point, mission, basis);
+    const pointLocal = localPoint(point, basis);
     return { x: origin.x + pointLocal.cross * scale, y: origin.y - pointLocal.along * scale };
   };
   const ship = projected(mission.ship);

@@ -159,7 +159,6 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
             </div>
           </div>
           <div class="sf-flight-actions">
-            <button class="sf-flight-action sf-face" data-face type="button" aria-label="Face objective">${icon('target')}<span>Face objective</span></button>
             <div class="sf-context-slot" aria-live="polite">
               <button class="sf-flight-action sf-drop" data-drop type="button" hidden>${icon('water')}<span>Release water</span></button>
               <button class="sf-flight-action" data-action type="button" hidden>${icon('target')}<span>Attach bucket</span></button>
@@ -435,7 +434,6 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
   on('[data-drop]', 'click', () => dispatchCommand('drop'));
   on('[data-action]', 'click', () => dispatchCommand(by<HTMLButtonElement>('[data-action]').dataset.command || 'action'));
   on('[data-return]', 'click', () => dispatchCommand('return'));
-  on('[data-face]', 'click', () => dispatchCommand('faceObjective'));
   root.querySelectorAll<HTMLElement>('[data-resume]').forEach(button => button.addEventListener('click', () => {
     syncPaused(false);
     dispatchCommand('resume');
@@ -681,13 +679,13 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
       if (deckRecoveryApproach) {
         approachHint = deckRecoveryApproach.detail;
       } else if (guidance.label === 'Freshwater lake' && state.bucketAttached) {
-        approachHint = state.position.y > 36 ? 'Lower toward 25 m to dip the bucket.'
-          : state.position.y < 15 ? 'Climb toward 25 m over the lake.'
+        approachHint = state.position.y > 28 ? 'Hold near 25 m over the lake; lower the bucket to dip.'
+          : state.position.y < 22 ? 'Climb toward 25 m over the lake.'
             : speed > 12 ? 'Slow down over the lake to fetch water.'
               : 'Move closer to the lake marker.';
       } else if (guidance.label === 'Active fire' && state.waterLitres > 0) {
-        approachHint = state.position.y < 32 || state.position.y > 85 ? 'Hold near 55 m over the fire.'
-          : speed > 12 ? 'Slow down before releasing water.'
+        approachHint = state.position.y < 38 || state.position.y > 70 ? 'Hold near 55 m over the fire.'
+          : speed > 3.5 ? 'Slow down below 3.5 m/s before releasing water.'
             : 'Move closer to the fire marker.';
       } else if (['deck_rig', 'shore_rig', 'shore_unrig', 'land', 'return'].includes(state.phase)) {
         approachHint = state.position.y > 10 ? 'Descend toward the marked landing point.'
@@ -704,7 +702,7 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
       : approachHint
         ? approachHint
       : guidance
-        ? `${distanceText} away. Face objective turns toward it.`
+        ? `${distanceText} away. Follow the marked bearing.`
         : 'Follow the marked objective.';
     by<HTMLElement>('.sf-objective-kicker').textContent = activeOperation ? 'IN PROGRESS' : 'NEXT OBJECTIVE';
     setObjectiveTitle(activeOperation?.title ?? nextTitle);
@@ -726,11 +724,9 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     if (showMessage) message.textContent = state.message;
     const drop = by<HTMLButtonElement>('[data-drop]');
     const action = by<HTMLButtonElement>('[data-action]');
-    const face = by<HTMLButtonElement>('[data-face]');
     const context = objectiveAction ? contextualActions[objectiveAction] : undefined;
     drop.hidden = !!activeOperation || objectiveAction !== 'release';
     action.hidden = !!activeOperation || !context || context.command === 'drop';
-    face.hidden = state.outcome !== 'none' || state.phase === 'debrief' || state.phase === 'failed';
     if (context && context.command !== 'drop') {
       action.querySelector('span')!.textContent = context.label;
       action.setAttribute('aria-label', context.label);
@@ -758,7 +754,6 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     const crashPlaying = collisionFailure && crashStartedAt !== null && performance.now() - crashStartedAt < 2400;
     game.dataset.crashing = String(crashPlaying);
     const terminal = state.outcome !== 'none' || state.phase === 'debrief' || state.phase === 'failed';
-    face.hidden = terminal;
     outcomePanel.hidden = !terminal || crashPlaying;
     syncDialog(terminal && !crashPlaying ? outcomePanel : paused ? pausePanel : null);
     if (terminal) {

@@ -106,6 +106,30 @@ for (const [index, campaign] of campaigns.entries()) describe(`${campaign.id} ai
     }
   });
 
+  it('has a wide, shallow rear opening with a recessed, closed interior', () => {
+    const model = models[index];
+    const recess = meshesWithMaterial(model.root, 'Chinook rear cargo recess');
+    expect(recess).toHaveLength(1);
+    const bounds = new THREE.Box3().setFromObject(recess[0]);
+    const size = bounds.getSize(new THREE.Vector3());
+    const center = bounds.getCenter(new THREE.Vector3());
+    expect(size.x / size.y).toBeGreaterThan(2.6);
+    expect(size.x / size.y).toBeLessThan(3.6);
+    expect(size.z).toBeGreaterThan(.3);
+    expect(size.z).toBeLessThan(1);
+    // Rays through the central aperture must reach the recessed interior,
+    // never an old painted cap or a hole all the way through the airframe.
+    for (const x of [-.22, 0, .22]) for (const y of [-.15, 0, .15]) {
+      const origin = new THREE.Vector3(center.x + size.x * x, center.y + size.y * y, bounds.max.z + .5);
+      const hits = new THREE.Raycaster(origin, new THREE.Vector3(0, 0, -1), 0, 2)
+        .intersectObject(model.root, true);
+      expect(hits.length).toBeGreaterThan(0);
+      expect(hits[0].object).toBe(recess[0]);
+      expect(hits[0].point.z).toBeLessThan(bounds.max.z - .2);
+      expect(hits[0].point.z).toBeGreaterThanOrEqual(bounds.min.z - .001);
+    }
+  });
+
   it('keeps painted skin behind the cockpit glass from each pane normal', () => {
     const model = models[index];
     const glass = meshesWithMaterial(model.root, 'Chinook cockpit glazing');
@@ -129,4 +153,32 @@ for (const [index, campaign] of campaigns.entries()) describe(`${campaign.id} ai
       }
     }
   });
+});
+
+it('centres the JGSDF roundels on the tanks with service lettering fully forward', () => {
+  const model = models[campaigns.findIndex(campaign => campaign.id === 'jp_ketapang_2026_09')];
+  const tankBounds = new THREE.Box3();
+  for (const skin of meshesWithMaterial(model.root, 'JGSDF three-colour painted skin')) {
+    const positions = skin.geometry.getAttribute('position');
+    for (let i = 0; i < positions.count; i++) {
+      const point = new THREE.Vector3().fromBufferAttribute(positions, i).applyMatrix4(skin.matrixWorld);
+      // Only the external fuel tanks carry painted skin this far outboard.
+      if (Math.abs(point.x) > 1.6 && point.y < .15) tankBounds.expandByPoint(point);
+    }
+  }
+  expect(tankBounds.isEmpty()).toBe(false);
+  const tankCenterZ = tankBounds.getCenter(new THREE.Vector3()).z;
+  const roundels = meshesWithMaterial(model.root, 'JGSDF roundel white').flatMap(connectedBounds);
+  const lettering = meshesWithMaterial(model.root, 'JGSDF service lettering')
+    .map(mesh => new THREE.Box3().setFromObject(mesh));
+  expect(roundels).toHaveLength(2);
+  expect(lettering).toHaveLength(2);
+  for (const roundel of roundels) {
+    const center = roundel.getCenter(new THREE.Vector3());
+    expect(center.z).toBeCloseTo(tankCenterZ, 2);
+    const text = lettering.find(bounds => Math.sign(bounds.getCenter(new THREE.Vector3()).x) === Math.sign(center.x))!;
+    expect(text).toBeDefined();
+    expect(text.max.z).toBeLessThan(roundel.min.z - .15);
+    expect(text.min.z).toBeGreaterThan(tankBounds.min.z);
+  }
 });
