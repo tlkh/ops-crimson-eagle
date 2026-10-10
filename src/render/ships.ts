@@ -36,6 +36,10 @@ function paintMap(base: string, flightDeck: boolean) {
     for (let x = 65; x < w; x += 95) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
     ctx.strokeStyle = 'rgba(3,11,16,.035)';
     for (let y = 35; y < h; y += 75) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+    // Tiny, weathered weld fasteners sit on the plate joins and soften into
+    // the hull texture at distance rather than reading as decorative dots.
+    ctx.fillStyle = 'rgba(209,214,207,.13)';
+    for (let x=65;x<w;x+=95) for(let y=22;y<h;y+=38) { ctx.beginPath();ctx.arc(x,y,1.15,0,Math.PI*2);ctx.fill(); }
     for (let i=0; i<90; i++) {
       const x=random()*w,y=random()*h;
       ctx.fillStyle='rgba(14,24,27,.045)'; ctx.fillRect(x,y,2+random()*5,5+random()*26);
@@ -43,7 +47,51 @@ function paintMap(base: string, flightDeck: boolean) {
   }
   const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 4;
-  return texture;
+  const normalCanvas = document.createElement('canvas'); normalCanvas.width = 512; normalCanvas.height = flightDeck ? 512 : 128;
+  const normalCtx = normalCanvas.getContext('2d');
+  const aoCanvas = document.createElement('canvas'); aoCanvas.width = 512; aoCanvas.height = flightDeck ? 512 : 128;
+  const aoCtx = aoCanvas.getContext('2d');
+  const roughCanvas = document.createElement('canvas'); roughCanvas.width = 256; roughCanvas.height = flightDeck ? 256 : 96;
+  const roughCtx = roughCanvas.getContext('2d');
+  if (!normalCtx || !aoCtx || !roughCtx) return { map: texture };
+  normalCtx.fillStyle = '#8080ff'; normalCtx.fillRect(0,0,normalCanvas.width,normalCanvas.height);
+  aoCtx.fillStyle = '#f2f2f2'; aoCtx.fillRect(0,0,aoCanvas.width,aoCanvas.height);
+  roughCtx.fillStyle = flightDeck ? '#e6e6e6' : '#d8d8d8'; roughCtx.fillRect(0,0,roughCanvas.width,roughCanvas.height);
+  if (flightDeck) {
+    // Very low relief at deck plate joints; guide paint stays on its existing mesh.
+    normalCtx.strokeStyle = '#8680ff'; normalCtx.lineWidth = 1;
+    aoCtx.strokeStyle = '#929292'; aoCtx.lineWidth = 1.3;
+    roughCtx.strokeStyle = '#d0d0d0'; roughCtx.lineWidth = 1;
+    for (let y=22;y<normalCanvas.height;y+=40) {
+      normalCtx.beginPath();normalCtx.moveTo(0,y);normalCtx.lineTo(normalCanvas.width,y);normalCtx.stroke();
+      aoCtx.beginPath();aoCtx.moveTo(0,y);aoCtx.lineTo(aoCanvas.width,y);aoCtx.stroke();
+      roughCtx.beginPath();roughCtx.moveTo(0,y/2);roughCtx.lineTo(roughCanvas.width,y/2);roughCtx.stroke();
+    }
+    for (let x=28;x<normalCanvas.width;x+=84) {
+      normalCtx.beginPath();normalCtx.moveTo(x,0);normalCtx.lineTo(x,normalCanvas.height);normalCtx.stroke();
+      aoCtx.beginPath();aoCtx.moveTo(x,0);aoCtx.lineTo(x,aoCanvas.height);aoCtx.stroke();
+      roughCtx.beginPath();roughCtx.moveTo(x/2,0);roughCtx.lineTo(x/2,roughCanvas.height);roughCtx.stroke();
+    }
+  } else {
+    // Hull plating follows the longitudinal UV axis with subtle relief and seams.
+    normalCtx.strokeStyle = '#8580ff'; normalCtx.lineWidth = 1;
+    aoCtx.strokeStyle = '#929292'; aoCtx.lineWidth = 1.2;
+    roughCtx.strokeStyle = '#c8c8c8'; roughCtx.lineWidth = 1;
+    for (let x=32;x<normalCanvas.width;x+=48) {
+      normalCtx.beginPath();normalCtx.moveTo(x,0);normalCtx.lineTo(x,normalCanvas.height);normalCtx.stroke();
+      aoCtx.beginPath();aoCtx.moveTo(x,0);aoCtx.lineTo(x,aoCanvas.height);aoCtx.stroke();
+      const roughX=x*roughCanvas.width/normalCanvas.width;
+      roughCtx.beginPath();roughCtx.moveTo(roughX,0);roughCtx.lineTo(roughX,roughCanvas.height);roughCtx.stroke();
+    }
+    for (let y=18;y<normalCanvas.height;y+=36) {
+      normalCtx.beginPath();normalCtx.moveTo(0,y);normalCtx.lineTo(normalCanvas.width,y);normalCtx.stroke();
+      aoCtx.beginPath();aoCtx.moveTo(0,y);aoCtx.lineTo(aoCanvas.width,y);aoCtx.stroke();
+    }
+  }
+  const normalMap = new THREE.CanvasTexture(normalCanvas); normalMap.anisotropy=2;
+  const aoMap = new THREE.CanvasTexture(aoCanvas); aoMap.anisotropy=2;
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas); roughnessMap.anisotropy=2;
+  return { map: texture, normalMap, aoMap, roughnessMap };
 }
 function box(g: THREE.Group, w: number, h: number, l: number, x: number, y: number, z: number, m: THREE.Material) {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, l), m);
@@ -179,7 +227,7 @@ function batch(g: THREE.Group) {
     if (geo.index) { const flat=geo.toNonIndexed(); geo.dispose(); geo=flat; }
     // Keep UVs for the authored paint maps; solid fittings shed theirs so
     // different primitive attribute sets can still be merged by material.
-    if (child.material.map) {
+    if (child.material.map || child.material.normalMap || child.material.roughnessMap || child.material.aoMap) {
       if (!geo.hasAttribute('uv')) geo.setAttribute('uv',new THREE.Float32BufferAttribute(new Float32Array(geo.getAttribute('position').count*2),2));
     } else geo.deleteAttribute('uv');
     const list=byMaterial.get(child.material)??[]; list.push(geo); byMaterial.set(child.material,list); g.remove(child); child.geometry.dispose();
@@ -198,8 +246,10 @@ export function createShip(scene: THREE.Scene, campaign: Campaign, mission: Miss
   const steel=mat(japanese?'#858d8e':'#626d70',.18,.9), light=mat('#aab1af',.12,.77), dark=mat('#273239',.08,.86);
   const deck=mat('#ffffff',.04,.96), white=mat('#d8dcd5',.02,.9), black=mat('#22282b',.08,.92), red=mat('#754e44',.08,.92);
   const hullPaint=mat('#ffffff',.12,.9);
-  hullPaint.map=paintMap(japanese?'#727b7c':'#566164',false);
-  deck.map=paintMap(japanese?'#737979':'#4d585a',true);
+  Object.assign(hullPaint,paintMap(japanese?'#727b7c':'#566164',false));
+  Object.assign(deck,paintMap(japanese?'#737979':'#4d585a',true));
+  hullPaint.normalScale.set(.18,.18); hullPaint.aoMapIntensity=.43;
+  deck.normalScale.set(.12,.12); deck.aoMapIntensity=.36;
   hull(g,L,B,stern,japanese,hullPaint,black,red,deck);
   // Closed well-dock gate; no false open void or see-through transom.
   box(g,B*.71,6.8,.2,0,-6.3,stern+.06,dark);

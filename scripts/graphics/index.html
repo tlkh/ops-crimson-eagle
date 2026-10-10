@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Graphics verification · Ops Crimson Eagle</title>
+<style>
+html,body{margin:0;height:100%;background:#14211d;color:#ecebdc;font:14px system-ui}body{display:flex;flex-direction:column}header{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 16px}label{display:flex;gap:6px;align-items:center}select,button{font:inherit;color:inherit;background:#243c30;padding:6px;border:1px solid #80977e}#scene{flex:1;min-height:0}canvas{width:100%;height:100%;display:block}output{position:fixed;left:12px;bottom:12px;padding:8px;background:#10201be6;white-space:pre;font:11px monospace;pointer-events:none}
+</style></head><body>
+<header><strong>Graphics verification</strong><label>Campaign <select id="campaign"><option value="sg">RSAF</option><option value="jp">JSDF</option></select></label><label>View <select id="view"><option>deck</option><option>lake</option><option>forest</option><option>fire</option><option>night</option></select></label><label>Quality <select id="quality"><option>auto</option><option>high</option><option>battery</option></select></label><button id="switch">Rebuild scene</button><button id="pause">Pause</button><button id="capture">Capture image</button></header>
+<div id="scene"></div><output id="metrics">Loading graphics…</output><script type="module" src="./preview.ts"></script></body></html>

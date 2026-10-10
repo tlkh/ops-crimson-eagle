@@ -7,7 +7,8 @@ import { shouldObserveFire } from '../sim/fireWork';
 import { FLIGHT_STICK_RESPONSE, mapStickResponse, normalizeStickVector } from './stickResponse';
 import { musicTracks } from '../music';
 import { createMenu } from './menu';
-import { cinematicEffectsEnabled, setCinematicEffectsEnabled } from '../visualPreferences';
+import { cinematicEffectsEnabled, setCinematicEffectsEnabled, graphicsMode, setGraphicsMode } from '../visualPreferences';
+import type { GraphicsMode } from '../render/quality';
 
 type Callbacks = {
   onSelect(campaignId: CampaignId, missionId: string): Promise<void>;
@@ -183,6 +184,15 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     </main>`;
 
   const cinematicButton = root.querySelector<HTMLButtonElement>('[data-cinematic]')!;
+  const graphicsControl = document.createElement('label');
+  graphicsControl.className = 'sf-graphics-setting';
+  graphicsControl.innerHTML = `<span>Graphics</span><select aria-label="Graphics quality" data-graphics-quality>
+    <option value="auto">Auto · adaptive quality</option><option value="high">High · maximum detail</option>
+    <option value="battery">Battery · reduced effects</option></select>`;
+  cinematicButton.after(graphicsControl);
+  const graphicsSelect = graphicsControl.querySelector('select')!;
+  graphicsSelect.value = graphicsMode();
+  graphicsSelect.addEventListener('change', () => setGraphicsMode(graphicsSelect.value as GraphicsMode));
   cinematicButton.addEventListener('click', () => {
     const enabled = !cinematicEffectsEnabled();
     setCinematicEffectsEnabled(enabled);

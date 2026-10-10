@@ -2,47 +2,83 @@ import * as THREE from 'three';
 import type { Campaign, Mission, SimState } from '../types';
 import { evaluateTimeOfDay } from './timeOfDay';
 
-function colorFromRgb(rgb: readonly [number, number, number]): THREE.Color {
-  return new THREE.Color().setRGB(rgb[0], rgb[1], rgb[2]);
-}
-
 function seeded(seed: number) {
   let state = seed >>> 0 || 1;
   return () => ((state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 4294967296);
 }
 
-/** A soft, broken cloud silhouette with enough internal variation to avoid a repeated disc. */
+function colorFromRgb(rgb: readonly [number, number, number]): THREE.Color {
+  return new THREE.Color().setRGB(rgb[0], rgb[1], rgb[2]);
+}
+
+function hashGrid(x: number, y: number, seed: number): number {
+  let value = Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(seed, 1442695041);
+  value = Math.imul(value ^ (value >>> 13), 1274126177);
+  return ((value ^ (value >>> 16)) >>> 0) / 4294967295;
+}
+
+function valueNoise(x: number, y: number, seed: number): number {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = x - ix, fy = y - iy;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  const a = hashGrid(ix, iy, seed), b = hashGrid(ix + 1, iy, seed);
+  const c = hashGrid(ix, iy + 1, seed), d = hashGrid(ix + 1, iy + 1, seed);
+  return (a + (b - a) * sx) + ((c + (d - c) * sx) - (a + (b - a) * sx)) * sy;
+}
+
+/** Deterministic, soft-edged cloud detail with a broken, wind-stretched silhouette. */
 function cloudTexture(seed: number, wispy = false) {
   const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 256;
+  canvas.width = canvas.height = 512;
   const ctx = canvas.getContext('2d')!;
-  const rand = seeded(seed);
-  const blobs = wispy ? 30 : 15;
-  for (let i = 0; i < blobs; i++) {
-    const x = 32 + rand() * 192;
-    const y = 43 + rand() * 170;
-    const rx = (wispy ? 15 : 25) + rand() * (wispy ? 27 : 38);
-    const ry = (wispy ? 4 : 16) + rand() * (wispy ? 10 : 25);
-    const alpha = (wispy ? .10 : .075) + rand() * (wispy ? .12 : .16);
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.scale(rx, ry);
-    const gradient = ctx.createRadialGradient(0, 0, .025, 0, 0, 1);
-    gradient.addColorStop(0, `rgba(255,255,255,${alpha})`);
-    gradient.addColorStop(.56, `rgba(255,255,255,${alpha * .76})`);
-    gradient.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(0, 0, 1, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+  const image = ctx.createImageData(canvas.width, canvas.height);
+  const width = canvas.width, height = canvas.height;
+  const smooth = (edge0: number, edge1: number, value: number) => {
+    const t = clamp01((value - edge0) / (edge1 - edge0));
+    return t * t * (3 - 2 * t);
+  };
+  for (let py = 0; py < height; py++) {
+    for (let px = 0; px < width; px++) {
+      const u = px / (width - 1), v = py / (height - 1);
+      const broad = valueNoise(u * 4.5, v * (wispy ? 7 : 4.5), seed + 1);
+      const medium = valueNoise(u * 10, v * (wispy ? 18 : 10), seed + 7);
+      const fine = valueNoise(u * 22, v * (wispy ? 38 : 22), seed + 19);
+      const detail = valueNoise(u * 46, v * (wispy ? 70 : 46), seed + 43);
+      const field = broad * .46 + medium * .28 + fine * .17 + detail * .09;
+      const dx = (u - .5) * (wispy ? 1.35 : 1.82);
+      const dy = (v - .5) * (wispy ? 2.25 : 1.82);
+      const envelope = Math.max(0, 1 - Math.hypot(dx, dy));
+      const breakup = (field - .46) * (wispy ? .72 : .84);
+      const mass = envelope * (wispy ? .52 : .73) + breakup;
+      const alpha = smooth(wispy ? .19 : .20, wispy ? .38 : .40, mass);
+      const striation = wispy ? .84 + .16 * valueNoise(u * 3.5, v * 26, seed + 61) : 1;
+      const i = (py * width + px) * 4;
+      const brightness = Math.round(226 + field * 29);
+      image.data[i] = brightness;
+      image.data[i + 1] = brightness;
+      image.data[i + 2] = brightness;
+      image.data[i + 3] = Math.round(alpha * striation * 255);
+    }
   }
+  ctx.putImageData(image, 0, 0);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = true;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
   return texture;
 }
 
-function makeCloudLayer(count: number, texture: THREE.Texture, opacity: number, fog: boolean) {
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+
+type CloudLighting = {
+  sunDirection: THREE.Vector3;
+  sunColor: THREE.Color;
+  ambientColor: THREE.Color;
+  sunIntensity: { value: number };
+};
+
+function makeCloudLayer(count: number, texture: THREE.Texture, opacity: number, fog: boolean, lighting: CloudLighting) {
   const material = new THREE.MeshBasicMaterial({
     map: texture,
     color: '#ffffff',
@@ -52,6 +88,59 @@ function makeCloudLayer(count: number, texture: THREE.Texture, opacity: number, 
     side: THREE.DoubleSide,
     fog,
   });
+  material.onBeforeCompile = shader => {
+    shader.uniforms.cloudSunDirection = { value: lighting.sunDirection };
+    shader.uniforms.cloudSunColor = { value: lighting.sunColor };
+    shader.uniforms.cloudAmbientColor = { value: lighting.ambientColor };
+    shader.uniforms.cloudSunIntensity = lighting.sunIntensity;
+    shader.vertexShader = `
+      varying vec2 vCloudUv;
+      varying vec3 vCloudAxisX;
+      varying vec3 vCloudAxisY;
+      varying vec3 vCloudPlaneNormal;
+    ` + shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+       vCloudUv = uv;
+       mat3 cloudMatrix = mat3(modelMatrix * instanceMatrix);
+       vCloudAxisX = normalize(cloudMatrix * vec3(1.0, 0.0, 0.0));
+       vCloudAxisY = normalize(cloudMatrix * vec3(0.0, 1.0, 0.0));
+       vCloudPlaneNormal = normalize(cross(vCloudAxisX, vCloudAxisY));`,
+    );
+    shader.fragmentShader = `
+      uniform vec3 cloudSunDirection;
+      uniform vec3 cloudSunColor;
+      uniform vec3 cloudAmbientColor;
+      uniform float cloudSunIntensity;
+      varying vec2 vCloudUv;
+      varying vec3 vCloudAxisX;
+      varying vec3 vCloudAxisY;
+      varying vec3 vCloudPlaneNormal;
+    ` + shader.fragmentShader.replace(
+      '#include <color_fragment>',
+      `#include <color_fragment>
+       float cloudCenter = clamp(diffuseColor.a / max(opacity, 0.001), 0.0, 1.0);
+       vec2 uvDx = dFdx(vCloudUv), uvDy = dFdy(vCloudUv);
+       float alphaDx = dFdx(cloudCenter), alphaDy = dFdy(cloudCenter);
+       float uvDet = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
+       vec2 cloudSlope = vec2(0.0);
+       if (abs(uvDet) > 0.00000001) {
+         cloudSlope = vec2(alphaDx * uvDy.y - alphaDy * uvDx.y, alphaDy * uvDx.x - alphaDx * uvDy.x) / uvDet;
+         cloudSlope = clamp(cloudSlope * 0.018, vec2(-0.72), vec2(0.72));
+       }
+       vec3 cloudNormal = normalize(-vCloudPlaneNormal - cloudSlope.x * vCloudAxisX - cloudSlope.y * vCloudAxisY);
+       vec3 sunVector = normalize(cloudSunDirection);
+       float cloudLight = max(dot(cloudNormal, sunVector), 0.0);
+       float cloudBackScatter = max(dot(-cloudNormal, sunVector), 0.0) * (0.18 + cloudCenter * 0.12);
+       float cloudLit = cloudLight + cloudBackScatter;
+       float cloudRim = pow(clamp(cloudLight, 0.0, 1.0), 2.4);
+       vec3 cloudFill = cloudAmbientColor * 0.74 + cloudSunColor * cloudSunIntensity * (0.10 + 0.26 * cloudLit);
+       cloudFill += cloudSunColor * cloudSunIntensity * cloudRim * 0.10;
+       cloudFill *= 1.0 - smoothstep(0.55, 0.96, cloudCenter) * 0.10;
+       diffuseColor.rgb *= cloudFill;`,
+    );
+  };
+  material.customProgramCacheKey = () => 'directional-cloud-lighting-v1';
   const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), material, count);
   mesh.frustumCulled = false;
   return mesh;
@@ -64,7 +153,7 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
   // preview renderer instead.
   if (options.preview) {
     scene.fog = null;
-    return { update(_time?: number, _camera?: THREE.Vector3, _state?: SimState) {}, dispose() {} };
+    return { update(_time?: number, _camera?: THREE.Vector3, _state?: SimState) {}, setQuality(_quality: 'high' | 'low') {}, dispose() {} };
   }
 
   const jp = campaign.id === 'jp_ketapang_2026_09';
@@ -111,8 +200,16 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
 
   const lowTexture = cloudTexture(mission.seed + 303);
   const highTexture = cloudTexture(mission.seed + 1709, true);
-  const lowClouds = makeCloudLayer(48, lowTexture, .52, true);
-  const highClouds = makeCloudLayer(30, highTexture, .30, true);
+  const makeCloudLighting = (): CloudLighting => ({
+    sunDirection: new THREE.Vector3(0, 1, 0),
+    sunColor: new THREE.Color(1, 1, 1),
+    ambientColor: new THREE.Color(.7, .78, .84),
+    sunIntensity: { value: 1 },
+  });
+  const lowCloudLighting = makeCloudLighting();
+  const highCloudLighting = makeCloudLighting();
+  const lowClouds = makeCloudLayer(48, lowTexture, .52, true, lowCloudLighting);
+  const highClouds = makeCloudLayer(30, highTexture, .30, true, highCloudLighting);
   const lowCloudMaterial = lowClouds.material as THREE.MeshBasicMaterial;
   const highCloudMaterial = highClouds.material as THREE.MeshBasicMaterial;
   const lowDummy = new THREE.Object3D();
@@ -158,24 +255,43 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
   const wind = mission.wind;
   const ambientFog = scene.fog as THREE.FogExp2;
   const smokeFogColor = new THREE.Color('#aaa58d');
+  const sunDirection = new THREE.Vector3();
+  const sunColor = new THREE.Color();
+  const ambientColor = new THREE.Color();
+  const baseFogColor = new THREE.Color();
   const baselineDensity = ambientFog.density;
   const windLength = Math.max(.1, Math.hypot(wind.x, wind.z));
+  const setQuality = (next: 'high' | 'low') => {
+    lowClouds.count = next === 'high' ? 48 : 25;
+    highClouds.count = next === 'high' ? 30 : 14;
+  };
   return {
+    setQuality,
     update(time: number, camera?: THREE.Vector3, state?: SimState) {
       if (camera) sky.position.copy(camera);
       const timeOfDay = evaluateTimeOfDay(mission, time);
+      sunDirection.set(...timeOfDay.sunDirection);
+      sunColor.setRGB(...timeOfDay.sunColor);
+      ambientColor.setRGB(...timeOfDay.ambientColor);
+      lowCloudLighting.sunDirection.copy(sunDirection);
+      lowCloudLighting.sunColor.copy(sunColor);
+      lowCloudLighting.ambientColor.copy(ambientColor);
+      lowCloudLighting.sunIntensity.value = timeOfDay.sunIntensity / 3.5;
+      highCloudLighting.sunDirection.copy(sunDirection);
+      highCloudLighting.sunColor.copy(sunColor);
+      highCloudLighting.ambientColor.copy(ambientColor);
+      highCloudLighting.sunIntensity.value = timeOfDay.sunIntensity / 3.5;
       const uniforms = (sky.material as THREE.ShaderMaterial).uniforms;
-      uniforms.zenith.value.copy(colorFromRgb(timeOfDay.skyZenith));
-      uniforms.horizon.value.copy(colorFromRgb(timeOfDay.skyHorizon));
-      uniforms.sunDirection.value.set(...timeOfDay.sunDirection);
-      uniforms.sunColor.value.copy(colorFromRgb(timeOfDay.sunColor));
+      uniforms.zenith.value.setRGB(...timeOfDay.skyZenith);
+      uniforms.horizon.value.setRGB(...timeOfDay.skyHorizon);
+      uniforms.sunDirection.value.copy(sunDirection);
+      uniforms.sunColor.value.copy(sunColor);
       uniforms.sunVisibility.value = THREE.MathUtils.smoothstep(timeOfDay.sunDirection[1], -.025, .03);
-      const nightTint = colorFromRgb(timeOfDay.ambientColor);
-      lowCloudMaterial.color.setRGB(1, 1, 1).lerp(nightTint, timeOfDay.nightStrength * .56);
-      highCloudMaterial.color.setRGB(1, 1, 1).lerp(nightTint, timeOfDay.nightStrength * .46);
-      lowCloudMaterial.opacity = .52 - timeOfDay.nightStrength * .18;
-      highCloudMaterial.opacity = .30 - timeOfDay.nightStrength * .11;
-      const baseFogColor = colorFromRgb(timeOfDay.fogColor);
+      lowCloudMaterial.color.setRGB(1, 1, 1);
+      highCloudMaterial.color.setRGB(1, 1, 1);
+      lowCloudMaterial.opacity = .53 - timeOfDay.nightStrength * .21;
+      highCloudMaterial.opacity = .31 - timeOfDay.nightStrength * .13;
+      baseFogColor.setRGB(...timeOfDay.fogColor);
       ambientFog.color.copy(baseFogColor);
       ambientFog.density = baselineDensity * (1 + timeOfDay.nightStrength * .28);
       const drift = Math.min(2600, Math.max(-2600, time * .34));
@@ -197,6 +313,18 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
         ambientFog.density += smoke * .0008;
         ambientFog.color.lerp(smokeFogColor, smoke * .42);
       }
+    },
+    dispose() {
+      scene.remove(sky, lowClouds, highClouds);
+      (sky.geometry as THREE.BufferGeometry).dispose();
+      (sky.material as THREE.Material).dispose();
+      lowClouds.geometry.dispose();
+      highClouds.geometry.dispose();
+      lowCloudMaterial.dispose();
+      highCloudMaterial.dispose();
+      lowTexture.dispose();
+      highTexture.dispose();
+      scene.fog = null;
     },
   };
 }

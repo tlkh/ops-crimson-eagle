@@ -92,6 +92,9 @@ Keep gameplay authoritative in the simulation. Render code consumes state; it mu
 - Keep equipment names readable without truncation, reserve image dimensions before asynchronous loading, and retain clear next-step mission cues.
 - Respect reduced motion, maintain keyboard focus across menu transitions, and keep touch controls usable at phone sizes. Ground crew and gameplay effects should follow simulation time so they freeze when paused.
 - Audio unlocks on a user gesture; essential feedback must remain understandable when muted.
+- The application owns the frame scheduler: preserve the 60 Hz simulation while `renderScheduledFrame` budgets 30 Hz mobile rendering. `renderFrame` remains available for deterministic capture. Keep Auto/High/Battery profiles in `src/render/quality.ts`; do not use CPU submission time as a substitute for GPU timing.
+- Runtime graphics textures use renderer-scoped leases from `src/render/textureAssets.ts`. Release leases on scene disposal; recursive material cleanup must skip `texture.userData.sharedAsset`. Keep decoder URLs under `import.meta.env.BASE_URL` and retain the procedural/PNG fallback.
+- Burn history is a shared, immutable visual field used by terrain, vegetation and fire sources; cooling must not erase its char or resurrect crowns. Keep flames inside the authored suppression radius, preserve all trunk colliders and clearances, and protect actual airport surfaces rather than applying the 900 m vegetation exclusion to burn rendering. See [burn history](docs/burn-history.md).
 
 ## Saves, assets, and deployment
 
@@ -131,4 +134,5 @@ Dev and preview URLs include `/ops-crimson-eagle/`. `build` runs TypeScript chec
 - [Aircraft](docs/aircraft-geometry-references.md), [ships](docs/ship-geometry-references.md), and [maps](docs/map-geometry-references.md): model and geographic references.
 - [Campaign artwork](docs/campaign-artwork.json): current satellite illustration sources and generation prompts.
 - [Visual refinement](docs/visual-refinement.md): visual implementation notes.
+- [Graphics quality](docs/graphics-quality.md): rendering budgets, generated material provenance, diagnostic limits and physical-device acceptance checks.
 - [Verification](docs/verification.md) and [status](docs/status.md): dated snapshots, not proof of current checks. Recheck source and tests before repeating their counts or completion claims. Older asset notes may describe superseded artwork.

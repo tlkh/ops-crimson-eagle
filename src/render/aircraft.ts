@@ -135,17 +135,58 @@ function paintSet(japanese: boolean) {
   }
   // Subtle broad paint variation, panel joints and fasteners survive mip filtering naturally.
   const wash=ctx.createLinearGradient(0,0,1024,0); wash.addColorStop(0,'#ffffff08'); wash.addColorStop(.48,'#00000000'); wash.addColorStop(.75,'#00000017'); wash.addColorStop(1,'#ffffff08'); ctx.fillStyle=wash; ctx.fillRect(0,0,1024,1024);
-  ctx.strokeStyle='#15201838'; ctx.lineWidth=1.2;
+  ctx.strokeStyle='#15201830'; ctx.lineWidth=1.3;
   for(let y=48;y<1024;y+=97) {ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(1024,y);ctx.stroke();}
   for(let x=40;x<1024;x+=128) {ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,1024);ctx.stroke();}
-  ctx.fillStyle='#151b173a'; for(let y=48;y<1024;y+=97) for(let x=10;x<1024;x+=18) ctx.fillRect(x,y+4,1.5,1.5);
+  // A few access-panel outlines break up the broad skin without changing the
+  // aircraft silhouette or adding costly geometry to the consolidated model.
+  ctx.strokeStyle='#111a1435'; ctx.lineWidth=1.6;
+  for(const [x,y,w,h] of [[180,280,112,74],[568,344,126,86],[805,628,92,132],[332,790,145,68]]) {
+    ctx.strokeRect(x+.5,y+.5,w,h);
+    ctx.strokeStyle='#d6d2b025'; ctx.lineWidth=.9; ctx.strokeRect(x+2,y+2,w-4,h-4);
+    ctx.strokeStyle='#111a1435'; ctx.lineWidth=1.6;
+  }
+  ctx.fillStyle='#151b1742';
+  for(let y=48;y<1024;y+=97) for(let x=10;x<1024;x+=18) ctx.fillRect(x,y+4,1.7,1.7);
+  // The two exhausts sit near the aft top of the cabin. Their soot is soft and
+  // restrained so it reads as surface use rather than a dark livery feature.
+  for(const x of [0,512]) {
+    const stain=ctx.createLinearGradient(x,900,x,1024);
+    stain.addColorStop(0,'rgba(35,35,30,0)'); stain.addColorStop(.48,'rgba(35,35,30,.055)'); stain.addColorStop(1,'rgba(35,35,30,.10)');
+    ctx.fillStyle=stain; ctx.fillRect(x-26,900,52,124);
+  }
   const map=new THREE.CanvasTexture(canvas); map.colorSpace=THREE.SRGBColorSpace; map.anisotropy=4;
   const roughCanvas=document.createElement('canvas'); roughCanvas.width=128; roughCanvas.height=128;
   const rc=roughCanvas.getContext('2d')!;rc.fillStyle='#d4d4d4';rc.fillRect(0,0,128,128);
   for(let i=0;i<256;i++){rc.fillStyle=i%2?'#cecece':'#d9d9d9';rc.fillRect((i*43)%128,(i*71)%128,7,5);}
-  const roughnessMap=new THREE.CanvasTexture(roughCanvas);
-  const skin=mat('#ffffff',1,{map,roughnessMap,metalness:.06}); skin.name=japanese?'JGSDF three-colour painted skin':'RSAF olive-grey painted skin';
-  const aftSkin=japanese?mat('#3e5549',1,{roughnessMap,metalness:.06}):skin;
+  const roughnessMap=new THREE.CanvasTexture(roughCanvas); roughnessMap.anisotropy=2;
+  const normalCanvas=document.createElement('canvas'); normalCanvas.width=512; normalCanvas.height=512;
+  const nc=normalCanvas.getContext('2d')!; nc.fillStyle='#8080ff'; nc.fillRect(0,0,512,512);
+  nc.strokeStyle='#8580ff'; nc.lineWidth=1.1;
+  for(let y=24;y<512;y+=49) {nc.beginPath();nc.moveTo(0,y);nc.lineTo(512,y);nc.stroke();}
+  nc.strokeStyle='#7b80ff';
+  for(let x=20;x<512;x+=64) {nc.beginPath();nc.moveTo(x,0);nc.lineTo(x,512);nc.stroke();}
+  const normalMap=new THREE.CanvasTexture(normalCanvas); normalMap.anisotropy=2;
+  const aoCanvas=document.createElement('canvas'); aoCanvas.width=512; aoCanvas.height=512;
+  const ac=aoCanvas.getContext('2d')!; ac.fillStyle='#f4f4f4'; ac.fillRect(0,0,512,512);
+  ac.strokeStyle='#858585'; ac.lineWidth=1.5;
+  for(let y=24;y<512;y+=49) {ac.beginPath();ac.moveTo(0,y);ac.lineTo(512,y);ac.stroke();}
+  ac.strokeStyle='#999999';
+  for(let x=20;x<512;x+=64) {ac.beginPath();ac.moveTo(x,0);ac.lineTo(x,512);ac.stroke();}
+  const aoMap=new THREE.CanvasTexture(aoCanvas); aoMap.anisotropy=2;
+  const skin=mat('#ffffff',1,{map,roughnessMap,normalMap,normalScale:new THREE.Vector2(.22,.22),aoMap,aoMapIntensity:.48,metalness:.04}); skin.name=japanese?'JGSDF three-colour painted skin':'RSAF olive-grey painted skin';
+  let aftSkin=skin;
+  if(japanese) {
+    const aftCanvas=document.createElement('canvas'); aftCanvas.width=512; aftCanvas.height=512;
+    const aftCtx=aftCanvas.getContext('2d')!; aftCtx.fillStyle='#ffffff'; aftCtx.fillRect(0,0,512,512);
+    for(const x of [0,256]) {
+      const stain=aftCtx.createLinearGradient(x,438,x,512);
+      stain.addColorStop(0,'rgba(35,35,30,0)'); stain.addColorStop(.55,'rgba(35,35,30,.045)'); stain.addColorStop(1,'rgba(35,35,30,.075)');
+      aftCtx.fillStyle=stain; aftCtx.fillRect(x-13,438,26,74);
+    }
+    const aftMap=new THREE.CanvasTexture(aftCanvas); aftMap.colorSpace=THREE.SRGBColorSpace; aftMap.anisotropy=2;
+    aftSkin=mat('#3e5549',1,{map:aftMap,roughnessMap,normalMap,normalScale:new THREE.Vector2(.22,.22),aoMap,aoMapIntensity:.48,metalness:.04});
+  }
   if(japanese) aftSkin.name='JGSDF solid green aft paint';
   const trim=mat(japanese?'#3d5146':base,.85), seam=mat(japanese?'#263630':'#484f40',.86);
   return {skin,aftSkin,trim,seam};
@@ -159,7 +200,9 @@ export function createAircraft(campaign: Campaign) {
   const paint = paintSet(japanese);
   const body = paint.skin, olive = paint.trim, brown = paint.seam;
   const dark = mat('#202620'), rubber = mat('#131815', .98), metal = mat('#6d7168', .42, { metalness: .7 });
-  const glass = mat('#142d35', .14, { metalness: .38, side: THREE.DoubleSide });
+  // Opaque dark cockpit glass keeps a readable canopy while using a broad,
+  // restrained highlight instead of expensive transmission/refraction.
+  const glass = mat('#263d43', .18, { metalness: .32, side: THREE.DoubleSide, envMapIntensity: 1.18 });
   // Constant-section cargo cabin, sloping chin, broad flat rear closure: not an ellipsoid.
   const cabinStations: [number,number,number,number][] = [[-7.8,.1,-.65,-.15],[-7.4,.82,-1.05,.25],[-6.9,1.14,-1.3,.6],[-6.1,1.35,-1.34,1.38],[-5.2,1.42,-1.34,1.55],[4.6,1.42,-1.32,1.55],[6.0,1.34,-1.2,1.48],[6.8,1.16,-.97,1.35],[7.55,.91,-.61,1.17],[8.22,.70,-.31,1.03]];
   if (japanese) {
@@ -262,7 +305,13 @@ export function createAircraft(campaign: Campaign) {
   const batches=new Map<THREE.Material,THREE.BufferGeometry[]>();
   solid.traverse(o=>{if(o instanceof THREE.Mesh){const g=o.geometry.clone().applyMatrix4(o.matrixWorld);if (!(o.material as THREE.MeshBasicMaterial).map) g.deleteAttribute('uv');const list=batches.get(o.material)??[];list.push(g);batches.set(o.material,list);}});
   root.remove(solid);
-  for(const [material,geometries] of batches) { const g=mergeGeometries(geometries,false); if(g) mesh(root,g,material); geometries.forEach(geo=>geo.dispose()); }
+  for(const [material,geometries] of batches) {
+    const g=mergeGeometries(geometries,false);
+    if(g) {
+      mesh(root,g,material);
+    }
+    geometries.forEach(geo=>geo.dispose());
+  }
   solid.traverse(o=>{if(o instanceof THREE.Mesh)o.geometry.dispose();});
   return {root,rotors};
 }

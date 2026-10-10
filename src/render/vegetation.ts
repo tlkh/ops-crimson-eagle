@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import type { Campaign, Mission } from '../types';
 import type { TreeCollider } from '../sim/collision';
+import { atlasUv, createVegetationAtlases } from './vegetationTextures';
+import type { BurnField } from './burnField';
 
 export type VegetationPoint = { x: number; z: number };
 export type VegetationZone = { center: VegetationPoint; radius: number };
@@ -17,8 +19,10 @@ export type VegetationContext = {
   flightLegs: readonly (readonly [VegetationPoint, VegetationPoint])[];
   settlementExclusions: readonly VegetationZone[];
   farmExclusions: readonly VegetationZone[];
-  /** Reduced visuals keep every plant but use simpler species-specific crown geometry. */
+  /** Reduced visuals keep every tree but use a leaner close-range canopy mesh. */
   visualTier?: VegetationVisualTier;
+  /** Persistent fire history used to tint existing plants without changing placement. */
+  burnField?: BurnField;
 };
 
 export type VegetationStats = {
@@ -30,19 +34,28 @@ export type VegetationStats = {
   swamp: number;
   coastal: number;
   palms: number;
+  burnedTrees: number;
+  fringeTrees: number;
+  scorchedTrees: number;
+  charredTrees: number;
+  damageTriangles: number;
   understory: number;
   reeds: number;
   visualTier: VegetationVisualTier;
+  lodCells: { near: number; mid: number; far: number };
 };
 
 export type VegetationResult = {
   /** One entry per visible solid woody trunk in either detail tier. */
   treeColliders: TreeCollider[];
   stats: VegetationStats;
+  /** Reassigns each spatial batch to a canopy LOD around the active camera. */
+  update(camera: THREE.Vector3, quality?: 'high' | 'low'): void;
   dispose(): void;
 };
 
 type Species = 'broadleaf' | 'emergent' | 'secondary' | 'swamp' | 'coastal' | 'palm';
+export type BurnClassification = 'unburned' | 'fringe' | 'scorched' | 'charred';
 type Plant = {
   point: VegetationPoint;
   ground: number;
@@ -54,17 +67,89 @@ type Plant = {
   bark: THREE.Color;
   leaves: THREE.Color;
   rootScale: number;
+  burn: BurnClassification;
+  burnAge: number;
+  burnActivity: number;
+};
+const canopyProfiles: Record<Species, [number, number, number]> = {
+  broadleaf: [1, .94, 1],
+  emergent: [1.14, 1.08, 1.14],
+  secondary: [.82, 1.2, .84],
+  swamp: [1.16, .88, 1.12],
+  coastal: [1.26, .8, 1.2],
+  palm: [.7, .6, .7],
 };
 
 const TAU = Math.PI * 2;
 const PLANT_TARGET = 20_000;
 const UNDERSTORY_TARGET = 5_600;
 const REED_TARGET = 1_100;
+const CELL_COLUMNS = 4;
+const CELL_ROWS = 3;
+const LOCAL_T_MIN = -350;
+const LOCAL_T_MAX = 6_450;
+const LOCAL_S_MIN = -4_600;
+const LOCAL_S_MAX = 4_600;
+const HIGH_NEAR_DISTANCE = 220;
+const HIGH_MID_DISTANCE = 1_100;
+const LOW_NEAR_DISTANCE = 100;
+const LOW_MID_DISTANCE = 700;
 const distance = (a: VegetationPoint, b: VegetationPoint) => Math.hypot(a.x - b.x, a.z - b.z);
 
 function seeded(seed: number) {
   let state = seed >>> 0;
   return () => ((state = (state * 1664525 + 1013904223) >>> 0) / 4294967296);
+}
+
+export function classifyBurnSeverity(severity: number): BurnClassification {
+  const value = Number.isFinite(severity) ? severity : 0;
+  if (value >= .72) return 'charred';
+  if (value >= .38) return 'scorched';
+  if (value >= .08) return 'fringe';
+  return 'unburned';
+}
+
+function clampUnit(value: number) {
+  return Number.isFinite(value) ? THREE.MathUtils.clamp(value, 0, 1) : 0;
+}
+
+function tintForBurn(classification: BurnClassification, age: number, activity: number) {
+  const ageMix = clampUnit(age);
+  const heat = clampUnit(activity);
+  if (classification === 'charred') {
+    return new THREE.Color('#201e1b')
+      .lerp(new THREE.Color('#625b50'), ageMix * .7)
+      .lerp(new THREE.Color('#151412'), heat * .22);
+  }
+  if (classification === 'scorched') {
+    return new THREE.Color('#684d35').lerp(new THREE.Color('#74674d'), ageMix * .3)
+      .lerp(new THREE.Color('#3e342a'), heat * .16);
+  }
+  if (classification === 'fringe') {
+    return new THREE.Color('#81754b').lerp(new THREE.Color('#908257'), ageMix * .25)
+      .lerp(new THREE.Color('#63553b'), heat * .12);
+  }
+  return new THREE.Color('#ffffff');
+}
+
+function applyBurnField(plants: Plant[], field?: BurnField) {
+  if (!field) return;
+  for (const plant of plants) {
+    const sample = field.sample(plant.point.x, plant.point.z);
+    plant.burn = classifyBurnSeverity(sample.severity);
+    plant.burnAge = clampUnit(sample.age);
+    plant.burnActivity = clampUnit(sample.activity);
+    if (plant.burn === 'unburned') continue;
+
+    const tint = tintForBurn(plant.burn, plant.burnAge, plant.burnActivity);
+    if (plant.burn === 'charred') {
+      plant.bark.lerp(tint, .94);
+    } else {
+      const amount = plant.burn === 'scorched' ? .7 : .42;
+      plant.leaves.lerp(tint, amount);
+      plant.bark.lerp(tint, plant.burn === 'scorched' ? .2 : .08);
+    }
+  }
 }
 
 function distanceToLeg(point: VegetationPoint, [start, end]: readonly [VegetationPoint, VegetationPoint]) {
@@ -74,119 +159,120 @@ function distanceToLeg(point: VegetationPoint, [start, end]: readonly [Vegetatio
   return Math.hypot(point.x - start.x - t * dx, point.z - start.z - t * dz);
 }
 
-function makeCrown(species: Species, reduced = false): THREE.BufferGeometry {
-  if (reduced) {
-    const profiles: Record<Species, [number, number, number, number]> = {
-      broadleaf: [.94, .7, .9, 0],
-      emergent: [.98, .76, .94, .04],
-      secondary: [.7, 1.02, .73, .12],
-      swamp: [1.02, .48, .9, -.03],
-      coastal: [1.08, .43, .96, -.1],
-      palm: [.62, .38, .62, -.04],
-    };
-    const [width, height, depth, crownOffset] = profiles[species];
-    const geometry = new THREE.DodecahedronGeometry(1, 0);
-    const positions = geometry.getAttribute('position');
-    const colors: number[] = [];
-    for (let i = 0; i < positions.count; i++) {
-      const x = positions.getX(i), y = positions.getY(i), z = positions.getZ(i);
-      const taper = species === 'secondary' ? 1 - Math.max(0, y) * .2 : 1;
-      const crownY = y * height + crownOffset;
-      positions.setXYZ(i, x * width * taper, crownY, z * depth * taper);
-      const shade = .88 + Math.max(-.08, y * .07);
-      colors.push(shade, shade * 1.015, shade * .95);
-    }
-    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    geometry.computeVertexNormals();
-    return geometry;
-  }
+type CrownLod = 'near' | 'mid' | 'far';
+type ActiveCrownLod = CrownLod | 'near-low';
 
-  const lumps: THREE.BufferGeometry[] = [];
-  const addLump = (position: [number, number, number], scale: [number, number, number]) => {
-    const lump = new THREE.DodecahedronGeometry(1, 0);
-    lump.scale(...scale);
-    lump.translate(...position);
-    lumps.push(lump);
-  };
-  if (species === 'emergent') {
-    addLump([0, 0, 0], [.79, .76, .78]);
-    addLump([-.5, -.12, .12], [.48, .46, .48]);
-    addLump([.49, -.08, -.1], [.47, .5, .46]);
-    addLump([.04, .43, -.13], [.42, .4, .42]);
-  } else if (species === 'secondary') {
-    addLump([0, 0, 0], [.66, .86, .66]);
-    addLump([-.36, -.25, .14], [.4, .54, .4]);
-    addLump([.37, -.17, -.1], [.39, .57, .4]);
-  } else if (species === 'swamp') {
-    addLump([0, 0, 0], [.82, .57, .76]);
-    addLump([-.46, .1, .08], [.5, .4, .49]);
-    addLump([.49, .12, -.1], [.48, .4, .48]);
-    addLump([0, .24, .4], [.45, .4, .44]);
-  } else if (species === 'coastal') {
-    addLump([0, 0, 0], [.78, .59, .72]);
-    addLump([-.45, -.12, .08], [.5, .45, .48]);
-    addLump([.45, -.07, -.12], [.48, .47, .48]);
-  } else {
-    addLump([0, 0, 0], [.79, .62, .76]);
-    addLump([-.43, -.12, .12], [.48, .48, .48]);
-    addLump([.45, -.1, -.1], [.47, .46, .48]);
-    addLump([0, .3, -.05], [.49, .44, .5]);
-  }
-
+/** A tropical crown is a layered cluster of rounded boughs and small leaf fans. */
+function makeCrown(lod: CrownLod, visualTier: VegetationVisualTier): THREE.BufferGeometry {
+  const fullNear = lod === 'near' && visualTier === 'full';
+  const clusters: Array<[number, number, number, number, number, number, number]> = fullNear
+    ? [
+      [0, .02, 0, .48, .43, .5, 0],
+      [-.42, -.14, .1, .54, .37, .46, 1],
+      [.43, -.19, -.1, .55, .36, .51, 2],
+      [-.2, .22, -.43, .47, .35, .51, 1],
+      [.16, .1, .45, .45, .43, .51, 3],
+      [.02, .46, -.08, .42, .34, .43, 0],
+      [-.47, -.37, -.2, .38, .29, .37, 2],
+    ]
+    : lod === 'near'
+      ? [
+        [0, .02, 0, .5, .44, .51, 0],
+        [-.43, -.15, .08, .55, .38, .47, 1],
+        [.44, -.18, -.08, .55, .37, .51, 2],
+        [-.17, .2, -.43, .48, .36, .51, 1],
+        [.15, .12, .45, .46, .42, .52, 3],
+      ]
+      : lod === 'mid'
+        ? [
+          [0, .01, 0, .52, .44, .53, 0],
+          [-.43, -.15, .08, .56, .38, .48, 1],
+          [.44, -.17, -.08, .56, .38, .52, 2],
+          [.02, .37, -.04, .46, .36, .46, 3],
+        ]
+        : [[0, 0, 0, .83, .58, .82, 1]];
+  const fanCount = fullNear ? 5 : 0;
+  const segments = 5;
+  const rings = 3;
   const positions: number[] = [];
-  const normals: number[] = [];
-  const colors: number[] = [];
+  const uvs: number[] = [];
   const indices: number[] = [];
-  let offset = 0;
-  for (let lumpIndex = 0; lumpIndex < lumps.length; lumpIndex++) {
-    const lump = lumps[lumpIndex];
-    lump.computeVertexNormals();
-    const position = lump.getAttribute('position');
-    const normal = lump.getAttribute('normal');
-    const tint = .88 + lumpIndex * .035;
+  let vertexOffset = 0;
+  const addLeafMass = (
+    center: THREE.Vector3,
+    scale: THREE.Vector3,
+    rotationY: number,
+    tile: number,
+    salt: number,
+  ) => {
+    const geometry = new THREE.SphereGeometry(1, segments, rings);
+    const position = geometry.getAttribute('position');
+    const uv = geometry.getAttribute('uv');
+    const rotation = new THREE.Matrix4().makeRotationY(rotationY);
+    const point = new THREE.Vector3();
+    const jitter = (value: number, seed: number) => Math.sin(value * 8.1 + seed * 2.37) * .026
+      + Math.sin(value * 14.7 - seed * 1.93) * .014;
     for (let i = 0; i < position.count; i++) {
-      positions.push(position.getX(i), position.getY(i), position.getZ(i));
-      normals.push(normal.getX(i), normal.getY(i), normal.getZ(i));
-      colors.push(tint, tint * 1.015, tint * .95);
+      const x = position.getX(i), y = position.getY(i), z = position.getZ(i);
+      const bump = 1 + jitter(x + z * 1.7, salt) * (lod === 'near' ? 1 : .45);
+      point.set(x * scale.x * bump, y * scale.y * bump, z * scale.z * bump).applyMatrix4(rotation).add(center);
+      positions.push(point.x, point.y, point.z);
+      const [u, v] = atlasUv(uv.getX(i), uv.getY(i), tile);
+      uvs.push(u, v);
     }
-    const lumpIndices = lump.getIndex();
-    if (lumpIndices) {
-      for (let i = 0; i < lumpIndices.count; i++) indices.push(offset + lumpIndices.getX(i));
-    } else {
-      for (let i = 0; i < position.count; i++) indices.push(offset + i);
+    const sourceIndices = geometry.getIndex();
+    if (sourceIndices) {
+      for (let i = 0; i < sourceIndices.count; i++) indices.push(vertexOffset + sourceIndices.getX(i));
     }
-    offset += position.count;
-    lump.dispose();
+    vertexOffset += position.count;
+    geometry.dispose();
+  };
+
+  for (let i = 0; i < clusters.length; i++) {
+    const [x, y, z, sx, sy, sz, tile] = clusters[i];
+    addLeafMass(new THREE.Vector3(x, y, z), new THREE.Vector3(sx, sy, sz), i * .41, tile, i + 2);
   }
+  for (let i = 0; i < fanCount; i++) {
+    const angle = i / fanCount * TAU + .21;
+    const center = new THREE.Vector3(Math.cos(angle) * .54, -.23 + (i % 2) * .1, Math.sin(angle) * .54);
+    addLeafMass(center, new THREE.Vector3(.22, .1, .39), angle, (i + 1) % 4, i + 11);
+  }
+
   const result = new THREE.BufferGeometry();
   result.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  result.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-  result.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  result.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   result.setIndex(indices);
+  result.computeVertexNormals();
   return result;
 }
 
-/** One bent, low-poly bole and three branch forks, scaled per plant. */
+/** One tapered bole with three compact buttress roots, instanced for every solid tree. */
 function makeTrunk(): THREE.BufferGeometry {
   const trunk = new THREE.CylinderGeometry(.12, .25, 1, 5, 1, false);
   trunk.translate(0, .5, 0);
-  const pieces: THREE.BufferGeometry[] = [trunk];
-  for (let branch = 0; branch < 3; branch++) {
-    const angle = branch * TAU / 3 + .3;
-    const start = new THREE.Vector3(0, .57, 0);
-    const end = new THREE.Vector3(Math.cos(angle) * 1.1, .91, Math.sin(angle) * 1.1);
+  const pieces: Array<{ geometry: THREE.BufferGeometry; tile: number }> = [{ geometry: trunk, tile: 0 }];
+  for (let root = 0; root < 3; root++) {
+    const angle = root * TAU / 3 + .18;
+    const start = new THREE.Vector3(0, .31, 0);
+    const end = new THREE.Vector3(Math.cos(angle) * .66, .018, Math.sin(angle) * .66);
     const delta = end.clone().sub(start);
-    const fork = new THREE.CylinderGeometry(.02, .075, delta.length(), 4, 1, false);
-    fork.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.clone().normalize()));
-    fork.translate(...start.add(end).multiplyScalar(.5).toArray());
-    pieces.push(fork);
+    const flare = new THREE.CylinderGeometry(.16, .035, delta.length(), 3, 1, false);
+    flare.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.clone().normalize()));
+    flare.translate(...start.add(end).multiplyScalar(.5).toArray());
+    pieces.push({ geometry: flare, tile: root + 1 });
   }
   const positions: number[] = [];
+  const uvs: number[] = [];
   const indices: number[] = [];
   let offset = 0;
-  for (const piece of pieces) {
+  for (const { geometry: piece, tile } of pieces) {
     const attribute = piece.getAttribute('position');
-    for (let i = 0; i < attribute.count; i++) positions.push(attribute.getX(i), attribute.getY(i), attribute.getZ(i));
+    const uv = piece.getAttribute('uv');
+    for (let i = 0; i < attribute.count; i++) {
+      positions.push(attribute.getX(i), attribute.getY(i), attribute.getZ(i));
+      const mapped = atlasUv(uv?.getX(i) ?? 0, uv?.getY(i) ?? 0, tile);
+      uvs.push(...mapped);
+    }
     const index = piece.getIndex();
     if (index) for (let i = 0; i < index.count; i++) indices.push(offset + index.getX(i));
     else for (let i = 0; i < attribute.count; i++) indices.push(offset + i);
@@ -195,9 +281,67 @@ function makeTrunk(): THREE.BufferGeometry {
   }
   const result = new THREE.BufferGeometry();
   result.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  result.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   result.setIndex(indices);
   result.computeVertexNormals();
   return result;
+}
+
+/** Four tapered, forked boughs form a sparse 3D silhouette inside the former crown envelope. */
+function makeDeadBranches(): THREE.BufferGeometry {
+  const pieces: THREE.BufferGeometry[] = [];
+  const up = new THREE.Vector3(0, 1, 0);
+  const addSegment = (start: THREE.Vector3, end: THREE.Vector3, baseRadius: number, tipRadius: number) => {
+    const delta = end.clone().sub(start);
+    const geometry = new THREE.CylinderGeometry(tipRadius, baseRadius, delta.length(), 4, 1, true);
+    geometry.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(up, delta.clone().normalize()));
+    geometry.translate(...start.clone().add(end).multiplyScalar(.5).toArray());
+    pieces.push(geometry);
+  };
+  const addBough = (angle: number, reach: number, tipY: number) => {
+    const direction = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
+    const tangent = new THREE.Vector3(-direction.z, 0, direction.x);
+    const start = new THREE.Vector3(0, -.12, 0);
+    const middle = direction.clone().multiplyScalar(reach * .48).setY(-.02 + tipY * .4);
+    const tip = direction.clone().multiplyScalar(reach).setY(tipY);
+    const fork = direction.clone().multiplyScalar(reach * .77)
+      .add(tangent.clone().multiplyScalar(reach * .2)).setY(Math.min(.45, middle.y + .2));
+    addSegment(start, middle, .082, .055);
+    addSegment(middle, tip, .055, .022);
+    addSegment(middle, fork, .048, .018);
+  };
+  addBough(.18, .92, -.42);
+  addBough(1.72, .82, .5);
+  addBough(3.28, .96, .34);
+  addBough(4.76, .84, -.36);
+
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  let vertexOffset = 0;
+  for (const piece of pieces) {
+    const attribute = piece.getAttribute('position');
+    const uv = piece.getAttribute('uv');
+    for (let i = 0; i < attribute.count; i++) {
+      positions.push(attribute.getX(i), attribute.getY(i), attribute.getZ(i));
+      const [u, v] = atlasUv(uv?.getX(i) ?? 0, uv?.getY(i) ?? 0, 0);
+      uvs.push(u, v);
+    }
+    const index = piece.getIndex();
+    if (index) {
+      for (let i = 0; i < index.count; i++) indices.push(vertexOffset + index.getX(i));
+    } else {
+      for (let i = 0; i < attribute.count; i++) indices.push(vertexOffset + i);
+    }
+    vertexOffset += attribute.count;
+    piece.dispose();
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 /** Feathery palm pinnae on a bowed rachis; each instance is one frond. */
@@ -350,6 +494,7 @@ function makePlantField(campaign: Campaign, mission: Mission, context: Vegetatio
       point, ground, height: shape.height, radius: shape.radius, yaw, trunkScale,
       species: shape.species, bark, leaves,
       rootScale: shape.species === 'coastal' || shape.species === 'swamp' ? .58 + rng() * .65 : 0,
+      burn: 'unburned', burnAge: 0, burnActivity: 0,
     };
     plants.push(plant);
     colliders.push({ x: point.x, z: point.z, ground, height: shape.height, radius: shape.radius });
@@ -358,10 +503,7 @@ function makePlantField(campaign: Campaign, mission: Mission, context: Vegetatio
   return { plants, colliders };
 }
 
-/**
- * Creates low-poly, instanced lowland forest. Every rendered trunk and palm receives a
- * collider; reduced visuals simplify each crown while preserving every plant silhouette.
- */
+/** Creates deterministic tropical woodland in spatial batches with camera-driven crown LOD. */
 export function createVegetation(
   scene: THREE.Scene,
   campaign: Campaign,
@@ -369,117 +511,154 @@ export function createVegetation(
   context: VegetationContext,
 ): VegetationResult {
   const { plants, colliders } = makePlantField(campaign, mission, context);
+  applyBurnField(plants, context.burnField);
   const visualTier = context.visualTier ?? 'full';
-  const visible = plants;
-
-  const species: Species[] = ['broadleaf', 'emergent', 'secondary', 'swamp', 'coastal', 'palm'];
-  const capacities = new Map<Species, number>(species.map(kind => [kind, visible.reduce((sum, plant) => sum + Number(plant.species === kind), 0)]));
-  const geometries = new Map<Species, THREE.BufferGeometry>(species.map(kind => [kind, makeCrown(kind, visualTier === 'reduced')]));
-  const foliageMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: .98 });
-  const barkMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 1 });
+  const foliageAtlas = createVegetationAtlases();
+  const crownGeometries = new Map<CrownLod, THREE.BufferGeometry>([
+    ['near', makeCrown('near', visualTier)],
+    ['mid', makeCrown('mid', visualTier)],
+    ['far', makeCrown('far', visualTier)],
+  ]);
+  const lowNearGeometry = makeCrown('near', 'reduced');
+  const foliageMaterial = new THREE.MeshStandardMaterial({ map: foliageAtlas.foliage, color: '#ffffff', roughness: .98 });
+  const barkMaterial = new THREE.MeshStandardMaterial({ map: foliageAtlas.bark, color: '#ffffff', roughness: 1 });
+  const deadBranchMaterial = new THREE.MeshStandardMaterial({
+    map: foliageAtlas.bark, color: '#ffffff', roughness: 1, side: THREE.DoubleSide,
+  });
   const palmMaterial = new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: .96, side: THREE.DoubleSide });
-  const trunkMesh = new THREE.InstancedMesh(makeTrunk(), barkMaterial, visible.length);
-  trunkMesh.name = 'lowland tree boles';
-  trunkMesh.castShadow = false;
-  trunkMesh.receiveShadow = false;
-  const crowns = new Map<Species, THREE.InstancedMesh>();
-  for (const kind of species) {
-    const mesh = new THREE.InstancedMesh(geometries.get(kind)!, foliageMaterial, capacities.get(kind)!);
-    mesh.name = `${kind} canopy`;
-    mesh.castShadow = false;
-    mesh.receiveShadow = false;
-    crowns.set(kind, mesh);
-  }
-
-  const rootCapacity = visible.reduce((sum, plant) => sum + (plant.rootScale > 0 ? 3 : 0), 0);
-  const rootsGeometry = new THREE.CylinderGeometry(.018, .13, 1, 4, 1, false);
-  const roots = new THREE.InstancedMesh(rootsGeometry, barkMaterial, rootCapacity);
-  roots.name = 'coastal and swamp root flares';
-  roots.castShadow = false;
-  roots.receiveShadow = false;
-
+  const trunkGeometry = makeTrunk();
+  const deadBranchGeometry = makeDeadBranches();
   const frondGeometry = makePalmFrond();
-  const palmCount = capacities.get('palm')!;
-  const fronds = new THREE.InstancedMesh(frondGeometry, palmMaterial, palmCount * 7);
-  fronds.name = 'palm fronds';
-  fronds.castShadow = false;
-  fronds.receiveShadow = false;
-
   const dummy = new THREE.Object3D();
-  const fromUp = new THREE.Vector3(0, 1, 0);
-  const rootDirection = new THREE.Vector3();
-  const rootStart = new THREE.Vector3();
-  const rootEnd = new THREE.Vector3();
-  const counters = new Map<Species, number>(species.map(kind => [kind, 0]));
-  let rootIndex = 0;
-  let trunkIndex = 0;
-  let frondIndex = 0;
-
-  for (let plantIndex = 0; plantIndex < plants.length; plantIndex++) {
-    const plant = plants[plantIndex];
-    const { x, z } = plant.point;
-    dummy.position.set(x, plant.ground, z);
-    dummy.rotation.set(0, plant.yaw, 0);
-    dummy.scale.set(plant.trunkScale, plant.height, plant.trunkScale);
-    dummy.updateMatrix();
-    trunkMesh.setMatrixAt(trunkIndex, dummy.matrix);
-    trunkMesh.setColorAt(trunkIndex++, plant.bark);
-
-    const crown = crowns.get(plant.species)!;
-    const crownIndex = counters.get(plant.species)!;
-    dummy.position.set(x, plant.ground + plant.height * .91, z);
-    dummy.rotation.set(0, plant.yaw, 0);
-    dummy.scale.set(plant.radius, plant.radius * (plant.species === 'secondary' ? .8 : .68), plant.radius);
-    dummy.updateMatrix();
-    crown.setMatrixAt(crownIndex, dummy.matrix);
-    crown.setColorAt(crownIndex, plant.leaves);
-    counters.set(plant.species, crownIndex + 1);
-
-    if (plant.rootScale > 0) {
-      for (let i = 0; i < 3; i++) {
-        const angle = plant.yaw + i * TAU / 3 + .2;
-        rootStart.set(x + Math.cos(angle) * .48, plant.ground + plant.height * .24, z + Math.sin(angle) * .48);
-        rootEnd.set(x + Math.cos(angle) * plant.rootScale * 2.45, plant.ground + .06, z + Math.sin(angle) * plant.rootScale * 2.45);
-        rootDirection.copy(rootEnd).sub(rootStart);
-        dummy.position.copy(rootStart).add(rootEnd).multiplyScalar(.5);
-        const rootLength = rootDirection.length();
-        dummy.quaternion.setFromUnitVectors(fromUp, rootDirection.normalize());
-        dummy.scale.set(plant.rootScale, rootLength, plant.rootScale);
-        dummy.updateMatrix();
-        roots.setMatrixAt(rootIndex, dummy.matrix);
-        roots.setColorAt(rootIndex++, plant.bark);
-      }
-    }
-
-    if (plant.species === 'palm') {
-      const top = plant.ground + plant.height;
-      for (let frond = 0; frond < 7; frond++) {
-        const angle = plant.yaw + frond / 7 * TAU;
-        dummy.position.set(x, top, z);
-        dummy.quaternion.setFromEuler(new THREE.Euler(.38 + (frond % 2) * .08, angle, (frond % 2 ? -1 : 1) * .12));
-        dummy.scale.setScalar(.76 + (frond % 3) * .08);
-        dummy.updateMatrix();
-        fronds.setMatrixAt(frondIndex++, dummy.matrix);
-      }
-    }
+  type CellBatch = {
+    bounds: { tMin: number; tMax: number; sMin: number; sMax: number };
+    crown: THREE.InstancedMesh;
+    crownLod: ActiveCrownLod;
+    trunk: THREE.InstancedMesh;
+    fronds?: THREE.InstancedMesh;
+  };
+  const cells: Plant[][] = Array.from({ length: CELL_COLUMNS * CELL_ROWS }, () => []);
+  for (const plant of plants) {
+    const local = context.local(plant.point);
+    const column = THREE.MathUtils.clamp(Math.floor((local.t - LOCAL_T_MIN) / (LOCAL_T_MAX - LOCAL_T_MIN) * CELL_COLUMNS), 0, CELL_COLUMNS - 1);
+    const row = THREE.MathUtils.clamp(Math.floor((local.s - LOCAL_S_MIN) / (LOCAL_S_MAX - LOCAL_S_MIN) * CELL_ROWS), 0, CELL_ROWS - 1);
+    cells[row * CELL_COLUMNS + column].push(plant);
   }
 
-  trunkMesh.count = trunkIndex;
-  roots.count = rootIndex;
-  fronds.count = frondIndex;
-  trunkMesh.instanceMatrix.needsUpdate = true;
-  if (trunkMesh.instanceColor) trunkMesh.instanceColor.needsUpdate = true;
-  roots.instanceMatrix.needsUpdate = true;
-  if (roots.instanceColor) roots.instanceColor.needsUpdate = true;
-  fronds.instanceMatrix.needsUpdate = true;
-  for (const [kind, mesh] of crowns) {
-    mesh.count = counters.get(kind)!;
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  const cellBatches: CellBatch[] = [];
+  for (let cellIndex = 0; cellIndex < cells.length; cellIndex++) {
+    const items = cells[cellIndex];
+    if (items.length === 0) continue;
+    const row = Math.floor(cellIndex / CELL_COLUMNS);
+    const column = cellIndex % CELL_COLUMNS;
+    const tMin = LOCAL_T_MIN + column / CELL_COLUMNS * (LOCAL_T_MAX - LOCAL_T_MIN);
+    const tMax = LOCAL_T_MIN + (column + 1) / CELL_COLUMNS * (LOCAL_T_MAX - LOCAL_T_MIN);
+    const sMin = LOCAL_S_MIN + row / CELL_ROWS * (LOCAL_S_MAX - LOCAL_S_MIN);
+    const sMax = LOCAL_S_MIN + (row + 1) / CELL_ROWS * (LOCAL_S_MAX - LOCAL_S_MIN);
+    const crowns = items.filter(plant => plant.species !== 'palm' && plant.burn !== 'charred');
+    const palmPlants = items.filter(plant => plant.species === 'palm');
+    const suffix = cellIndex === 0 ? '' : ` cell ${cellIndex}`;
+    const trunk = new THREE.InstancedMesh(trunkGeometry, barkMaterial, items.length);
+    trunk.name = `lowland tree boles${suffix}`;
+    trunk.castShadow = false;
+    trunk.receiveShadow = false;
+    trunk.count = items.length;
+
+    const crown = new THREE.InstancedMesh(crownGeometries.get('far')!, foliageMaterial, crowns.length);
+    crown.name = `lowland tropical canopy${suffix}`;
+    crown.castShadow = false;
+    crown.receiveShadow = false;
+    crown.count = crowns.length;
+
+    let fronds: THREE.InstancedMesh | undefined;
+    if (palmPlants.length > 0) {
+      fronds = new THREE.InstancedMesh(frondGeometry, palmMaterial, palmPlants.length * 7);
+      fronds.name = `palm fronds${suffix}`;
+      fronds.castShadow = false;
+      fronds.receiveShadow = false;
+      fronds.count = palmPlants.length * 7;
+    }
+
+    let trunkIndex = 0;
+    for (const plant of items) {
+      const { x, z } = plant.point;
+      dummy.position.set(x, plant.ground, z);
+      dummy.rotation.set(0, plant.yaw, 0);
+      const buttressScale = 1 + plant.rootScale * .16;
+      dummy.scale.set(plant.trunkScale * buttressScale, plant.height, plant.trunkScale * buttressScale);
+      dummy.updateMatrix();
+      trunk.setMatrixAt(trunkIndex, dummy.matrix);
+      trunk.setColorAt(trunkIndex++, plant.bark);
+    }
+
+    for (let i = 0; i < crowns.length; i++) {
+      const plant = crowns[i];
+      const [width, height, depth] = canopyProfiles[plant.species];
+      const crownHeight = plant.ground + plant.height * (plant.species === 'secondary' ? .9 : .88);
+      dummy.position.set(plant.point.x, crownHeight, plant.point.z);
+      dummy.rotation.set(0, plant.yaw, 0);
+      dummy.scale.set(plant.radius * width, plant.radius * height, plant.radius * depth);
+      dummy.updateMatrix();
+      crown.setMatrixAt(i, dummy.matrix);
+      crown.setColorAt(i, plant.leaves);
+    }
+
+    if (fronds) {
+      let frondIndex = 0;
+      for (const plant of palmPlants) {
+        if (plant.burn === 'charred') continue;
+        const { x, z } = plant.point;
+        const top = plant.ground + plant.height;
+        const frondTint = tintForBurn(plant.burn, plant.burnAge, plant.burnActivity);
+        for (let frond = 0; frond < 7; frond++) {
+          const angle = plant.yaw + frond / 7 * TAU;
+          dummy.position.set(x, top, z);
+          dummy.quaternion.setFromEuler(new THREE.Euler(.38 + (frond % 2) * .08, angle, (frond % 2 ? -1 : 1) * .12));
+          dummy.scale.setScalar(.76 + (frond % 3) * .08);
+          dummy.updateMatrix();
+          fronds.setMatrixAt(frondIndex++, dummy.matrix);
+          fronds.setColorAt(frondIndex - 1, frondTint);
+        }
+      }
+      fronds.count = frondIndex;
+      fronds.instanceMatrix.needsUpdate = true;
+      if (fronds.instanceColor) fronds.instanceColor.needsUpdate = true;
+    }
+
+    trunk.instanceMatrix.needsUpdate = true;
+    if (trunk.instanceColor) trunk.instanceColor.needsUpdate = true;
+    crown.instanceMatrix.needsUpdate = true;
+    if (crown.instanceColor) crown.instanceColor.needsUpdate = true;
+    scene.add(trunk, crown);
+    if (fronds) scene.add(fronds);
+    cellBatches.push({ bounds: { tMin, tMax, sMin, sMax }, crown, crownLod: 'far', trunk, fronds });
+  }
+
+  const charredPlants = plants.filter(plant => plant.burn === 'charred');
+  let deadBranches: THREE.InstancedMesh | undefined;
+  if (charredPlants.length > 0) {
+    deadBranches = new THREE.InstancedMesh(deadBranchGeometry, deadBranchMaterial, charredPlants.length);
+    deadBranches.name = 'charred dead branches';
+    deadBranches.castShadow = false;
+    deadBranches.receiveShadow = false;
+    for (let i = 0; i < charredPlants.length; i++) {
+      const plant = charredPlants[i];
+      const [width, height, depth] = canopyProfiles[plant.species];
+      const crownHeight = plant.ground + plant.height * (plant.species === 'secondary' ? .9 : .88);
+      dummy.position.set(plant.point.x, crownHeight, plant.point.z);
+      dummy.rotation.set(0, plant.yaw, 0);
+      dummy.scale.set(plant.radius * width, plant.radius * height, plant.radius * depth);
+      dummy.updateMatrix();
+      deadBranches.setMatrixAt(i, dummy.matrix);
+      deadBranches.setColorAt(i, plant.bark);
+    }
+    deadBranches.instanceMatrix.needsUpdate = true;
+    if (deadBranches.instanceColor) deadBranches.instanceColor.needsUpdate = true;
+    scene.add(deadBranches);
   }
 
   const understoryGeometry = new THREE.IcosahedronGeometry(1, 0);
-  const understoryMaterial = new THREE.MeshStandardMaterial({ color: '#68794b', roughness: 1 });
+  const understoryMaterial = new THREE.MeshStandardMaterial({ color: '#68794b', map: foliageAtlas.foliage, roughness: 1 });
   const understory = new THREE.InstancedMesh(understoryGeometry, understoryMaterial, UNDERSTORY_TARGET);
   understory.name = 'forest understory';
   understory.castShadow = false;
@@ -513,7 +692,16 @@ export function createVegetation(
     dummy.rotation.set(0, rng() * TAU, 0);
     dummy.updateMatrix();
     understory.setMatrixAt(understoryCount, dummy.matrix);
-    understory.setColorAt(understoryCount++, randomLeafColor(rng, 'secondary', t, s));
+    const leafColor = randomLeafColor(rng, 'secondary', t, s);
+    const burnSample = context.burnField?.sample(point.x, point.z);
+    if (burnSample) {
+      const burn = classifyBurnSeverity(burnSample.severity);
+      if (burn !== 'unburned') {
+        const amount = burn === 'charred' ? .88 : burn === 'scorched' ? .68 : .4;
+        leafColor.lerp(tintForBurn(burn, burnSample.age, burnSample.activity), amount);
+      }
+    }
+    understory.setColorAt(understoryCount++, leafColor);
   }
   understory.count = understoryCount;
   understory.instanceMatrix.needsUpdate = true;
@@ -534,39 +722,83 @@ export function createVegetation(
   reeds.count = reedCount;
   reeds.instanceMatrix.needsUpdate = true;
 
-  scene.add(trunkMesh, roots, fronds, understory, reeds, ...crowns.values());
+  scene.add(understory, reeds);
 
   const totals: Record<Species, number> = {
     broadleaf: 0, emergent: 0, secondary: 0, swamp: 0, coastal: 0, palm: 0,
   };
   for (const plant of plants) totals[plant.species]++;
+  const branchTriangleCount = (deadBranchGeometry.getIndex()?.count ?? deadBranchGeometry.getAttribute('position').count) / 3;
   const stats: VegetationStats = {
     woodyPlants: plants.length,
-    visiblePlants: trunkIndex,
+    visiblePlants: cellBatches.reduce((sum, cell) => sum + cell.trunk.count, 0),
     broadleaf: totals.broadleaf,
     emergent: totals.emergent,
     secondary: totals.secondary,
     swamp: totals.swamp,
     coastal: totals.coastal,
     palms: totals.palm,
+    burnedTrees: plants.filter(plant => plant.burn !== 'unburned').length,
+    fringeTrees: plants.filter(plant => plant.burn === 'fringe').length,
+    scorchedTrees: plants.filter(plant => plant.burn === 'scorched').length,
+    charredTrees: charredPlants.length,
+    damageTriangles: charredPlants.length * branchTriangleCount,
     understory: understoryCount,
     reeds: reedCount,
     visualTier,
+    lodCells: { near: 0, mid: 0, far: cellBatches.length },
+  };
+
+  const update = (camera: THREE.Vector3, quality: 'high' | 'low' = 'high') => {
+    const nearDistance = quality === 'high' ? HIGH_NEAR_DISTANCE : LOW_NEAR_DISTANCE;
+    const midDistance = quality === 'high' ? HIGH_MID_DISTANCE : LOW_MID_DISTANCE;
+    const cameraLocal = context.local({ x: camera.x, z: camera.z });
+    const lodCounts = { near: 0, mid: 0, far: 0 };
+    for (const cell of cellBatches) {
+      const distanceT = Math.max(cell.bounds.tMin - cameraLocal.t, 0, cameraLocal.t - cell.bounds.tMax);
+      const distanceS = Math.max(cell.bounds.sMin - cameraLocal.s, 0, cameraLocal.s - cell.bounds.sMax);
+      const distanceToCell = Math.hypot(distanceT, distanceS);
+      const lod: CrownLod = distanceToCell <= nearDistance ? 'near' : distanceToCell <= midDistance ? 'mid' : 'far';
+      lodCounts[lod]++;
+      const activeLod: ActiveCrownLod = lod === 'near' && quality === 'low' ? 'near-low' : lod;
+      if (activeLod !== cell.crownLod) {
+        cell.crown.geometry = activeLod === 'near-low' ? lowNearGeometry : crownGeometries.get(lod)!;
+        // Three.js caches InstancedMesh bounds; invalidate them when the shared crown shape changes.
+        cell.crown.boundingBox = null;
+        cell.crown.boundingSphere = null;
+        cell.crownLod = activeLod;
+      }
+    }
+    stats.lodCells.near = lodCounts.near;
+    stats.lodCells.mid = lodCounts.mid;
+    stats.lodCells.far = lodCounts.far;
+    // Small ground cover is the first detail tier removed on mobile; solid trunks and crowns stay.
+    understory.visible = quality === 'high';
   };
 
   return {
     treeColliders: colliders,
     stats,
+    update,
     dispose() {
-      scene.remove(trunkMesh, roots, fronds, understory, reeds, ...crowns.values());
-      trunkMesh.geometry.dispose();
-      rootsGeometry.dispose();
+      for (const cell of cellBatches) {
+        scene.remove(cell.trunk, cell.crown);
+        if (cell.fronds) scene.remove(cell.fronds);
+      }
+      if (deadBranches) scene.remove(deadBranches);
+      scene.remove(understory, reeds);
+      trunkGeometry.dispose();
+      deadBranchGeometry.dispose();
       frondGeometry.dispose();
       understoryGeometry.dispose();
       reedGeometry.dispose();
-      for (const geometry of geometries.values()) geometry.dispose();
+      for (const geometry of crownGeometries.values()) geometry.dispose();
+      lowNearGeometry.dispose();
+      foliageAtlas.foliage.dispose();
+      foliageAtlas.bark.dispose();
       foliageMaterial.dispose();
       barkMaterial.dispose();
+      deadBranchMaterial.dispose();
       palmMaterial.dispose();
       understoryMaterial.dispose();
       reedMaterial.dispose();

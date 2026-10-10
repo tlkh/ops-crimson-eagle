@@ -1,0 +1,13 @@
+Basis Universal transcoder runtime
+
+The files basis_transcoder.js and basis_transcoder.wasm are copied unchanged from
+three.js 0.180.0, examples/jsm/libs/basis/. Three.js includes these Basis
+Universal runtime files for use with KTX2Loader.
+
+Upstream project: https://github.com/BinomialLLC/basis_universal
+Three.js source: https://github.com/mrdoob/three.js/tree/r180/examples/jsm/libs/basis
+License: Apache License 2.0; see LICENSE.txt.
+
+SHA-256:
+8478b5b6d6b74e7d3082b89f6417321d8d1dc0307f2b30d4484bb11b441696a1  basis_transcoder.js
+6cf17dc889352c42e9acf8897107978d127005fe3386c36a0e3845e27967630a  basis_transcoder.wasm

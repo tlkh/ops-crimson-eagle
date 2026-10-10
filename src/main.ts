@@ -87,7 +87,7 @@ async function selectMission(campaignId: CampaignId, missionId: string) {
   const previousSceneNodes = new Set(sceneHost.childNodes);
   let nextScene: ReturnType<typeof createScene>;
   try {
-    nextScene = createScene(sceneHost);
+    nextScene = createScene(sceneHost, { externalClock: true });
   } catch (error) {
     for (const node of Array.from(sceneHost.childNodes)) {
       if (!previousSceneNodes.has(node)) node.remove();
@@ -215,6 +215,7 @@ function keyboardCommand(): FlightCommand {
 function frame(now: number) {
   const elapsed = Math.min(0.1, Math.max(0, (now - lastFrame) / 1000));
   lastFrame = now;
+  if (document.hidden) { requestAnimationFrame(frame); return; }
   if (state && campaign && mission) {
     if (!paused && state.phase !== 'debrief' && state.phase !== 'failed') {
       accumulator += elapsed;
@@ -237,7 +238,7 @@ function frame(now: number) {
       if (state.outcome !== 'none') writeProgress(state);
     }
     scene?.update(state, campaign, mission);
-    ui.showGame(state, campaign, mission, estimateLandingFuel(state, campaign, mission));
+    if (scene?.renderScheduledFrame(now, paused)) ui.showGame(state, campaign, mission, estimateLandingFuel(state, campaign, mission));
     if (state.phase === 'debrief' || state.phase === 'failed') paused = true;
     syncVoicePause();
     if (mapOpen) {
@@ -266,7 +267,7 @@ root.addEventListener('webglcontextlost', event => {
 root.addEventListener('webglcontextrestored', () => {
   if (state && campaign && mission) {
     scene?.dispose();
-    scene = createScene(ui.getSceneHost());
+    scene = createScene(ui.getSceneHost(), { externalClock: true });
     paused = true;
     ui.setPaused(true);
   }

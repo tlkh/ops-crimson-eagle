@@ -120,6 +120,7 @@ const fragmentShader = /* glsl */`
 export function createCinematicEffects(renderer: THREE.WebGLRenderer): {
   render(scene: THREE.Scene, camera: THREE.Camera, options: CinematicEffectOptions): void;
   resize(widthCssPixels: number, heightCssPixels: number): void;
+  estimatedBytes(): number;
   dispose(): void;
 } {
   let target: THREE.WebGLRenderTarget | undefined;
@@ -127,7 +128,7 @@ export function createCinematicEffects(renderer: THREE.WebGLRenderer): {
   let quad: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial> | undefined;
   let available = true;
   let disposed = false;
-  const pixelRatio = renderer.getPixelRatio();
+  let pixelRatio = renderer.getPixelRatio();
   const resolution = new THREE.Vector2(1, 1);
   const motionDirection = new THREE.Vector2();
   const projectedStart = new THREE.Vector3();
@@ -199,8 +200,11 @@ export function createCinematicEffects(renderer: THREE.WebGLRenderer): {
   };
 
   return {
+    estimatedBytes() { return target ? target.width * target.height * (8 + 4) * (target.samples + 1) : 0; },
     resize(widthCssPixels, heightCssPixels) {
       if (!available || disposed || !target || widthCssPixels <= 0 || heightCssPixels <= 0) return;
+      pixelRatio = renderer.getPixelRatio();
+      if (material) material.uniforms.uPixelRatio.value = pixelRatio;
       const width = Math.max(1, Math.round(widthCssPixels * pixelRatio));
       const height = Math.max(1, Math.round(heightCssPixels * pixelRatio));
       const previousTarget = renderer.getRenderTarget();

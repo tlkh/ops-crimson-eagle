@@ -216,7 +216,7 @@
 .sf-flight-action.sf-return { border-color: #9bb6a1; color: #e0ebe0; }
 
 .sf-modal { position: absolute; z-index: 5; inset: 0; display: grid; place-items: center; padding: calc(18px + env(safe-area-inset-top, 0px)) 18px calc(18px + env(safe-area-inset-bottom, 0px)); background: #07110dc9; }
-.sf-modal-card { position: relative; width: min(420px, 100%); padding: 27px; border: 1px solid #859183; background: #152420; color: #eeeadd; box-shadow: 0 20px 48px #040b09aa; }
+.sf-modal-card { position: relative; width: min(420px, 100%); max-height: calc(100dvh - 36px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); overflow-y: auto; padding: 27px; border: 1px solid #859183; background: #152420; color: #eeeadd; box-shadow: 0 20px 48px #040b09aa; }
 .sf-modal-card h2 { margin: 0; padding-right: 36px; font: 500 clamp(28px, 6vw, 38px)/1 Georgia, "Times New Roman", serif; letter-spacing: -.02em; }
 .sf-modal-card p { margin: 13px 0 22px; color: #c4d0c2; font-size: 12px; line-height: 1.5; }
 .sf-pause-music, .sf-pause-radio { width: 100%; justify-content: flex-start; padding-left: 13px; }
@@ -448,3 +448,8 @@
   .sf-tape-window { background: #0d211b; }
 }
  [hidden] { display: none !important; }
+/* Native select keeps graphics preferences reachable with touch and keyboard. */
+.sf-graphics-setting { display: grid; gap: 8px; margin: 16px 0; text-align: left; color: #ecebdc; }
+.sf-graphics-setting > span { font-weight: 600; }
+.sf-graphics-setting select { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #647369; border-radius: 6px; background: #172a22; color: #ecebdc; font: inherit; }
+.sf-graphics-setting select:focus-visible { outline: 2px solid #e9c67c; outline-offset: 3px; }

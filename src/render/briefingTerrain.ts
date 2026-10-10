@@ -128,7 +128,7 @@ function renderTerrain(campaign: Campaign, sourceMission: Mission, frame: Briefi
     // The preview mission has a fixed midday arc, keeping authored geometry
     // readable even for sorties that begin or end at night.
     world.update(0, camera.position);
-    const fire = createFire(scene, mission, world.terrainHeight);
+    const fire = createFire(scene, mission, world.terrainHeight, world.burnField);
     fire.update(0, 100, true, mission.wind, camera);
 
     renderer = new THREE.WebGLRenderer({

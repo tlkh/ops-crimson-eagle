@@ -10,6 +10,9 @@ import { createGroundSurface } from './groundSurface';
 import { createLandUse } from './landUse';
 import { createVegetation } from './vegetation';
 import { createDistantScenery } from './distantScenery';
+import type { RenderQualityProfile } from './quality';
+import type { TextureAssets } from './textureAssets';
+import { createBurnField, isBurnProtectedAirport } from './burnField';
 
 type V = { x: number; z: number };
 const TAU = Math.PI * 2;
@@ -24,7 +27,7 @@ function block(parent: THREE.Object3D, size: [number, number, number], position:
 /** Reference-informed, deliberately compressed lowland composition; not surveyed geography.
  * Keep all freshwater at y=0 and operational ground within 0.6 m of sim ground.
  * See docs/map-geometry-references.md for evidence and reconstruction boundaries. */
-export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mission, options: { preview?: boolean } = {}) {
+export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mission, options: { preview?: boolean; textureAssets?: TextureAssets } = {}) {
   const atmosphere = createAtmosphere(scene, campaign, mission, { preview: options.preview });
   const jp = campaign.id === 'jp_ketapang_2026_09';
   // Fixed theatre seed: the coastline and forest do not rearrange between sorties.
@@ -49,7 +52,6 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   const water = createWater(scene, campaign, mission, { reflections: !options.preview });
   water.surface(new THREE.PlaneGeometry(80000, 80000), 0, new THREE.Vector3(0, -9, 0));
 
-  const groundSurface = createGroundSurface();
   const positions: number[] = [], heights: number[] = [], colors: number[] = [], biomeWeights: number[] = [], uvs: number[] = [], indices: number[] = [];
   const smoothstep = (low: number, high: number, value: number) => {
     const v = THREE.MathUtils.clamp((value - low) / (high - low), 0, 1);
@@ -84,7 +86,6 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   }
   setRenderedTerrainHeights(mission, heights);
   const terrain = new THREE.BufferGeometry(); terrain.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); terrain.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3)); terrain.setAttribute('groundBiome', new THREE.Float32BufferAttribute(biomeWeights, 3)); terrain.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2)); terrain.setIndex(indices); terrain.computeVertexNormals();
-  const land = new THREE.Mesh(terrain, groundSurface.material); land.receiveShadow = true; scene.add(land);
 
   // Retain the entire authored refill disc; extend irregular bays away from the operational fire area.
   const r = mission.lake.radius;
@@ -126,6 +127,18 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     river: { centerS: riverS, halfWidth: jp ? 68 : 48 },
     shore: mission.shore,
   });
+  // One immutable footprint aligns the terrain, damaged trees and active edge.
+  // Existing protected land uses and water remain breaks in the authored history.
+  const burnField = createBurnField(mission, { eligible: (x, z) => {
+    const point = { x, z };
+    const { t, s } = local(point);
+    if (t < coastAt(s) + 12 || isLake(point)) return false;
+    if (Math.abs(s - riverS(t)) < (jp ? 68 : 48) + 12) return false;
+    if (isBurnProtectedAirport(mission, x, z)) return false;
+    return !landUse.exclusionZones.some(zone => Math.hypot(x - zone.x, z - zone.z) < zone.radius + 8);
+  } });
+  const groundSurface = createGroundSurface(options.textureAssets, burnField);
+  const land = new THREE.Mesh(terrain, groundSurface.material); land.receiveShadow = true; scene.add(land);
   const vegetation = createVegetation(scene, campaign, mission, {
     fromLocal,
     local,
@@ -136,6 +149,7 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     flightLegs,
     settlementExclusions: [],
     farmExclusions: landUse.exclusionZones.map(zone => ({ center: { x: zone.x, z: zone.z }, radius: zone.radius })),
+    burnField,
     visualTier: options.preview || window.matchMedia('(max-width: 768px), (pointer: coarse)').matches ? 'reduced' : 'full',
   });
   const roof = material('#777d73'), wall = material('#b7aa8e');
@@ -197,14 +211,22 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   });
   structureColliders.push(...landUse.structureColliders, ...coastalDetails.structureColliders);
   setStructureColliders(mission, structureColliders);
+  let detail: 'high' | 'low' = 'high';
   return {
+    setQuality(profile: RenderQualityProfile) {
+      detail = profile.detail;
+      water.setQuality({ reflectionSize: profile.reflectionSize, reflectionIntervalMs: profile.reflectionIntervalMs, reflections: profile.reflections && !options.preview });
+      atmosphere.setQuality(profile.detail);
+    },
     update(time: number, camera?: THREE.Vector3, state?: SimState, nightStrength = 0) {
+      groundSurface.update(state);
       water.update(time, state);
       atmosphere.update(time, camera, state);
       coastalDetails.update(time, nightStrength);
+      if (camera) vegetation.update(camera, detail);
     },
     dispose() { distantScenery.dispose(); coastalDetails.dispose(); landUse.dispose(); vegetation.dispose(); water.dispose(); groundSurface.dispose(); },
-    terrainHeight, lake, shore, boats: coastalDetails.boats, coastalStats: coastalDetails.stats,
+    terrainHeight, burnField, lake, shore, boats: coastalDetails.boats, coastalStats: coastalDetails.stats,
     vegetationStats: vegetation.stats, landUseStats: landUse.stats,
     coastalLightingAnchor: coastalDetails.lightingAnchor, route: { ux, uz, sx, sz, routeLength },
   };

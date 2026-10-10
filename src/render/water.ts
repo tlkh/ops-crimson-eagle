@@ -3,8 +3,14 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
 import type { Campaign, Mission, SimState } from '../types';
 import { evaluateTimeOfDay } from './timeOfDay';
 
-// One small planar reflection is refreshed at a time. The water continues to
-// animate between captures; the original mean surface remains the contact plane.
+export type WaterQuality = {
+  reflectionSize: 256 | 512;
+  reflectionIntervalMs: number;
+  reflections: boolean;
+};
+
+// One small planar reflection is refreshed at a time. Its capture cadence and
+// size follow the active quality profile; the mean surface remains the contact plane.
 const vertexShader = /* glsl */`
   uniform mat4 textureMatrix;
   varying vec4 mirrorUv;
@@ -81,22 +87,35 @@ const fragmentShader = /* glsl */`
     float sea = 1.0-step(.5,kind);
     vec2 direction = normalize(wind+vec2(.001));
     vec2 crosswind = vec2(-direction.y,direction.x);
-    float strength = mix(.52,1.0,sea);
+    float strength = mix(.42,1.0,sea);
     float fine = 1.0-smoothstep(80.0,700.0,distanceToEye);
-    vec2 slope = wave(p,direction,.22,.7,.07)*strength;
-    slope += wave(p,normalize(direction+crosswind*.57),.53,1.12,.085)*strength;
-    slope += wave(p,normalize(direction-crosswind*.83),1.23,1.7,.063)*strength;
-    slope += wave(p,crosswind,2.6,2.2,.038)*fine;
-    slope += wave(p,normalize(direction+crosswind*.31),5.1,2.8,.029)*fine;
+    // Slowly changing flow bends the otherwise parallel wave trains into broad
+    // patches. The lake uses a tighter, quieter warp than open sea.
+    vec2 domainUv = p*.0035 + direction*time*.009;
+    vec2 domain = vec2(
+      noise(domainUv+vec2(2.7,6.1)),
+      noise(domainUv+vec2(8.3,1.9))
+    )-.5;
+    float warpScale = mix(3.5,11.0,sea);
+    vec2 wavePosition = p + domain*warpScale;
+    vec2 flowDirection = normalize(direction + domain*mix(.14,.30,sea));
+    vec2 flowCrosswind = vec2(-flowDirection.y,flowDirection.x);
+    vec2 slope = wave(wavePosition,flowDirection,.075,.34,.075)*strength;
+    slope += wave(wavePosition+domain*4.0,normalize(flowDirection+flowCrosswind*.46),.20,.64,.075)*strength;
+    slope += wave(wavePosition-domain*3.0,normalize(flowDirection-flowCrosswind*.72),.54,1.08,.059)*strength;
+    slope += wave(wavePosition,flowCrosswind,1.55,1.55,.039)*fine;
+    slope += wave(wavePosition+domain,normalize(flowDirection+flowCrosswind*.32),3.9,2.2,.027)*fine;
+    slope += wave(wavePosition+domain*1.7,normalize(flowDirection-flowCrosswind*.21),8.0,3.0,.013)*fine;
     float grain = noise(p*.37-direction*time*.24);
-    slope *= .7+grain*.6;
+    slope *= .72+grain*.52;
 
     vec2 washSlopeA, washSlopeB;
     float aeration = wash(p,washA,washSlopeA)+wash(p,washB,washSlopeB);
     slope += washSlopeA+washSlopeB;
     float bucketDistance = length(p-bucketRipple.xy);
-    slope += normalize(p-bucketRipple.xy+vec2(.01)) * sin(bucketDistance*4.5-time*11.0) *
-      exp(-bucketDistance*.24)*bucketRipple.z*.13;
+    float bucketWave = sin(bucketDistance*3.15-time*8.0+noise((p-bucketRipple.xy)*.13)*.5);
+    slope += normalize(p-bucketRipple.xy+vec2(.01)) * bucketWave *
+      exp(-bucketDistance*.18)*bucketRipple.z*.11;
 
     // Moored vessel: small reflected wave trains and foam at the waterline,
     // rather than a fast-moving wake behind a stationary gameplay platform.
@@ -143,7 +162,9 @@ const fragmentShader = /* glsl */`
     float glint = pow(max(0.0,dot(normal,halfVector)),180.0);
     result += daylightSunColor*glint*.75*daylightStrength;
     result = mix(result,vec3(.60,.70,.68)*daylightAmbient,clamp(foam+aeration*.24,0.0,.66));
+    float impactFoam = exp(-pow((bucketDistance-(3.0+fract(time*.28)*1.6))/.68,2.0))*bucketRipple.z;
     result += vec3(.08,.11,.105)*daylightAmbient*bucketRipple.z*exp(-pow((bucketDistance-2.0)/1.4,2.0));
+    result = mix(result,vec3(.69,.77,.72)*daylightAmbient,impactFoam*.2);
     float shoreTransparency = sea * (1.0-smoothstep(0.0,72.0,max(0.0,beachDistance)));
     gl_FragColor = vec4(result,1.0-shoreTransparency*.28);
     #include <tonemapping_fragment>
@@ -152,8 +173,12 @@ const fragmentShader = /* glsl */`
   }
 `;
 
-export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mission, options: { reflections?: boolean } = {}) {
-  const reflections = options.reflections ?? true;
+export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mission, options: { reflections?: boolean; reflectionSize?: 256 | 512; reflectionIntervalMs?: number } = {}) {
+  let quality: WaterQuality = {
+    reflectionSize: options.reflectionSize ?? 512,
+    reflectionIntervalMs: options.reflectionIntervalMs ?? 80,
+    reflections: options.reflections ?? true,
+  };
   const jp = campaign.id === 'jp_ketapang_2026_09';
   const target = mission.shore ?? mission.lake;
   const route = new THREE.Vector2(target.x-mission.ship.x,target.z-mission.ship.z);
@@ -185,7 +210,7 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
     },
   });
   function surface(geometry: THREE.BufferGeometry, kind: 0 | 1, position: THREE.Vector3) {
-    const mesh = new Reflector(geometry, { textureWidth: 512, textureHeight: 512, multisample: 0, color: waterColor(kind), shader: shader(kind), clipBias: .002 });
+    const mesh = new Reflector(geometry, { textureWidth: quality.reflectionSize, textureHeight: quality.reflectionSize, multisample: 0, color: waterColor(kind), shader: shader(kind), clipBias: .002 });
     mesh.name = kind===0?'Reflective sea':'Reflective freshwater';
     mesh.rotation.x = -Math.PI/2; mesh.position.copy(position);
     const material = mesh.material as THREE.ShaderMaterial;
@@ -197,9 +222,9 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
     const entry = {mesh,kind,captured:false,lastCapture:-Infinity};
     surfaces.push(entry);
     mesh.onBeforeRender = function(renderer,renderScene,camera,geometry,material,group) {
-      if (!reflections || reflecting || entry.kind!==activeKind) return;
+      if (!quality.reflections || reflecting || entry.kind!==activeKind) return;
       const now = performance.now();
-      if (entry.captured && now-entry.lastCapture<80) return;
+      if (entry.captured && now-entry.lastCapture<quality.reflectionIntervalMs) return;
       reflecting = true;
       const hidden = surfaces.filter(other=>other!==entry && other.mesh.visible);
       hidden.forEach(other=>other.mesh.visible=false);
@@ -220,6 +245,22 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
   Object.assign(riverMaterial.uniforms,shared);
   return {
     surface, riverMaterial,
+    setQuality(next: WaterQuality) {
+      const wasEnabled = quality.reflections;
+      const previousSize = quality.reflectionSize;
+      quality = {
+        reflectionSize: next.reflectionSize,
+        reflectionIntervalMs: Number.isFinite(next.reflectionIntervalMs) ? Math.max(0, next.reflectionIntervalMs) : 80,
+        reflections: next.reflections,
+      };
+      for (const entry of surfaces) {
+        if (previousSize !== quality.reflectionSize) entry.mesh.getRenderTarget().setSize(quality.reflectionSize, quality.reflectionSize);
+        if (previousSize !== quality.reflectionSize || wasEnabled !== quality.reflections) {
+          entry.captured = false;
+          (entry.mesh.material as THREE.ShaderMaterial).uniforms.reflectionReady.value = 0;
+        }
+      }
+    },
     update(time: number, state?: SimState) {
       shared.time.value=time;
       const daylight = evaluateTimeOfDay(mission, time);

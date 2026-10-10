@@ -13,6 +13,12 @@ import { createNightLighting } from './nightLighting';
 import { createProximityParticles } from './proximityParticles';
 import { createCinematicEffects } from './cinematicEffects';
 import { cinematicEffectsEnabled, onCinematicEffectsChange } from '../visualPreferences';
+import { graphicsMode, onGraphicsModeChange } from '../visualPreferences';
+import { AdaptiveQuality, qualityProfile, RenderCadence, scenePixelRatio } from './quality';
+import type { GraphicsMode } from './quality';
+import { createGpuTimer, estimateSceneBytes, FrameHistory } from './renderDiagnostics';
+import { createEnvironmentLighting } from './environmentLighting';
+import { createTextureAssets } from './textureAssets';
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
@@ -106,15 +112,49 @@ function createCrashEffect(scene: THREE.Scene) {
   };
 }
 
-export function createScene(container: HTMLElement): {
+export type SceneCameraPose = {
+  position: { x: number; y: number; z: number };
+  target: { x: number; y: number; z: number };
+  fov?: number;
+};
+
+export type CreateSceneOptions = {
+  /** Render only when renderFrame is called, using its supplied delta. */
+  externalClock?: boolean;
+  /** Override the renderer's device pixel ratio. */
+  pixelRatio?: number;
+  quality?: GraphicsMode;
+};
+
+export function createScene(container: HTMLElement, options: CreateSceneOptions = {}): {
   update(state: SimState, campaign: Campaign, mission: Mission): void;
+  /** Render one frame. A supplied camera pose replaces the computed chase pose for this frame. */
+  renderFrame(deltaSeconds: number, cameraPose?: SceneCameraPose): void;
+  /** Use the application's frame scheduler without changing the simulation rate. */
+  renderScheduledFrame(nowMs: number, paused: boolean): boolean;
+  setQuality(mode: GraphicsMode): void;
+  readonly canvas: HTMLCanvasElement;
   dispose(): void;
-  diagnostics(): { calls: number; triangles: number; textures: number; geometries: number; frameMs: number };
+  diagnostics(): { calls: number; triangles: number; textures: number; geometries: number; frameMs: number;
+    cpuSubmissionMs: number; gpuMs: number | null; estimatedSceneBytes: number; renderTargetBytes: number;
+    frameIntervalP50Ms: number; frameIntervalP95Ms: number; samples: number; mode: GraphicsMode; qualityLevel: number;
+    targetFps: number; pixelRatio: number; width: number; height: number;
+    burnedTrees: number; charredTrees: number; damageTriangles: number };
 } {
+  const externalClock = options.externalClock ?? false;
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'low-power' });
   renderer.info.autoReset = false;
   let lastFrameMs = 0;
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  const mobileQuery = matchMedia('(max-width: 768px), (pointer: coarse)');
+  let mode = options.quality ?? graphicsMode();
+  const adaptive = new AdaptiveQuality();
+  const cadence = new RenderCadence();
+  const frameHistory = new FrameHistory();
+  const gpuTimer = createGpuTimer(renderer);
+  const textureAssets = createTextureAssets(renderer);
+  let profile = qualityProfile(mode, mobileQuery.matches, adaptive.level);
+  let renderDirty = true;
+  let pauseStartedAt: number | undefined;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.08;
@@ -122,6 +162,7 @@ export function createScene(container: HTMLElement): {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
+  const environment = createEnvironmentLighting(renderer, scene);
   scene.background = new THREE.Color('#b8d2d1');
   scene.fog = new THREE.Fog('#b8d2d1', 24_000, 128_000);
   const ambient = new THREE.HemisphereLight('#e4f0e8', '#637365', 2.25);
@@ -169,7 +210,8 @@ export function createScene(container: HTMLElement): {
   let previousSimTime = -1;
   let nightStrength = 0;
   let effectsPaused = true;
-  let clock = 0;
+  let elapsedClock = 0;
+  let renderTime = 0;
   let raf = 0;
   let firstFrame = true;
   let dropFraming = 0;
@@ -179,35 +221,53 @@ export function createScene(container: HTMLElement): {
 
   const onResize = () => {
     if (!container.clientWidth || !container.clientHeight) return;
+    renderer.setPixelRatio(Number.isFinite(options.pixelRatio) && (options.pixelRatio ?? 0) > 0
+      ? options.pixelRatio! : scenePixelRatio(container.clientWidth, container.clientHeight, window.devicePixelRatio, profile.renderScale));
     renderer.setSize(container.clientWidth, container.clientHeight, false);
     cinematic.resize(container.clientWidth, container.clientHeight);
     camera.aspect = container.clientWidth / container.clientHeight;
     camera.updateProjectionMatrix();
+    renderDirty = true;
   };
+  const applyQuality = () => {
+    profile = qualityProfile(mode, mobileQuery.matches, adaptive.level);
+    if (sun.shadow.mapSize.x !== profile.shadowSize) {
+      sun.shadow.map?.dispose(); sun.shadow.map = null;
+      sun.shadow.mapSize.setScalar(profile.shadowSize);
+    }
+    world?.setQuality(profile);
+    fire?.setQuality(profile.detail);
+    onResize();
+  };
+  const setQuality = (next: GraphicsMode) => {
+    mode = next; adaptive.level = 0; adaptive.reset(); cadence.reset(); applyQuality();
+  };
+  const unsubscribeQuality = onGraphicsModeChange(setQuality);
+  mobileQuery.addEventListener('change', applyQuality);
   const resize = new ResizeObserver(onResize);
   resize.observe(container);
   onResize();
 
-  const renderFrame = () => {
+  const drawFrame = (delta: number, cameraPose: SceneCameraPose | undefined, frameTime: number) => {
     if (disposed) return;
     const frameStart = performance.now();
     renderer.info.reset();
-    const delta = Math.min(.06, clock ? performance.now() / 1000 - clock : .016);
-    clock = performance.now() / 1000;
-    crashEffect?.update(clock);
+    renderTime = frameTime;
+    crashEffect?.update(renderTime);
     if (latestState && vehicle && latestCampaign && latestMission && fire && bucketRig && world) {
       const t = latestState.timeSec;
       const simulationDelta = previousSimTime < 0 ? 0 : Math.max(0, Math.min(.1, t - previousSimTime));
       effectsPaused = simulationDelta === 0 || latestState.outcome !== 'none';
       previousSimTime = t;
       const daylight = evaluateTimeOfDay(latestMission, t);
+      environment.update(daylight);
       nightStrength = daylight.nightStrength;
       sun.color.setRGB(...daylight.sunColor);
       sun.intensity = daylight.sunIntensity;
       sun.castShadow = daylight.sunIntensity > .05;
       ambient.color.setRGB(...daylight.ambientColor);
       ambient.groundColor.copy(ambient.color).multiplyScalar(.35);
-      ambient.intensity = daylight.ambientIntensity;
+      ambient.intensity = daylight.ambientIntensity * .72;
       cameraPrevious.copy(camera.position);
       const pos = latestState.position;
       aircraft.position.set(pos.x, pos.y, pos.z);
@@ -232,7 +292,6 @@ export function createScene(container: HTMLElement): {
       });
       const heat = clamp((latestState.fireHeat + latestState.peatHeat * .35) / 100, 0, 1);
       const burning = latestState.fireState === 'burning' || latestState.fireState === 'surface_suppressed' || latestState.fireState === 'being_secured';
-      fire.update(t, heat * 100, burning, latestMission.wind, camera);
       bucketRig.update(latestState, latestCampaign, latestMission);
       groundCrew?.update(latestState);
 
@@ -263,7 +322,18 @@ export function createScene(container: HTMLElement): {
       const altitudeFraming = THREE.MathUtils.smoothstep(heightAboveGround, 80, 320) * 3;
       camera.fov = clamp(53 + Math.hypot(latestState.velocity.x, latestState.velocity.z) * .022 + altitudeFraming, 53, 62);
       camera.updateProjectionMatrix();
+      // Capture callers can choose a stable view after the normal chase-camera
+      // calculations. World and cinematic effects below then use this pose too.
+      if (cameraPose) {
+        camera.position.set(cameraPose.position.x, cameraPose.position.y, cameraPose.position.z);
+        camera.lookAt(cameraPose.target.x, cameraPose.target.y, cameraPose.target.z);
+        if (cameraPose.fov !== undefined) {
+          camera.fov = cameraPose.fov;
+          camera.updateProjectionMatrix();
+        }
+      }
       camera.updateMatrixWorld();
+      fire.update(t, heat * 100, burning, latestMission.wind, camera, latestState);
       // Project below the rear landing gear so the load meter follows the Chinook.
       hudAnchor.set(0, -2.6, 6.4);
       aircraft.localToWorld(hudAnchor);
@@ -279,7 +349,7 @@ export function createScene(container: HTMLElement): {
       world.update(t, camera.position, latestState, nightStrength);
     }
     if (latestState) cinematic.render(scene, camera, {
-      enabled: effectsEnabled, reducedMotion: reducedMotion.matches, paused: effectsPaused,
+      enabled: effectsEnabled && profile.cinematic, reducedMotion: reducedMotion.matches, paused: effectsPaused,
       nightStrength, isPhone: container.clientWidth < 768,
       aircraftPosition: latestState.position,
       bucketPosition: latestState.bucketAttached ? latestState.bucket : undefined,
@@ -287,23 +357,61 @@ export function createScene(container: HTMLElement): {
     });
     else renderer.render(scene, camera);
     lastFrameMs = performance.now() - frameStart;
-    raf = requestAnimationFrame(renderFrame);
   };
-  raf = requestAnimationFrame(renderFrame);
+  const renderFrame = (deltaSeconds: number, cameraPose?: SceneCameraPose) => {
+    if (disposed) return;
+    const delta = Number.isFinite(deltaSeconds) ? Math.max(0, deltaSeconds) : 0;
+    elapsedClock += delta;
+    gpuTimer.begin();
+    try { drawFrame(delta, cameraPose, externalClock ? elapsedClock : performance.now() / 1000); }
+    finally { gpuTimer.end(); }
+  };
+  const renderScheduledFrame = (now: number, paused: boolean) => {
+    if (disposed || document.hidden) { cadence.reset(); adaptive.reset(); return false; }
+    if (paused) pauseStartedAt ??= now;
+    else if (pauseStartedAt !== undefined) {
+      pauseStartedAt = undefined;
+      cadence.reset();
+      adaptive.reset();
+    }
+    const settling = paused && now - (pauseStartedAt ?? now) < (latestState?.phase === 'failed' ? 4500 : 250);
+    if (renderDirty) cadence.reset();
+    const delta = cadence.take(now, paused && !settling && !renderDirty ? 2 : profile.targetFps);
+    if (delta === null) return false;
+    renderFrame(delta);
+    renderDirty = false;
+    if (!paused) {
+      frameHistory.add(delta * 1000);
+      if (mode === 'auto' && adaptive.observe(delta * 1000, lastFrameMs, gpuTimer.milliseconds, profile.targetFps)) applyQuality();
+    } else adaptive.reset();
+    return true;
+  };
+  const renderRafFrame = () => {
+    if (disposed) return;
+    renderScheduledFrame(performance.now(), false);
+    if (!disposed) raf = requestAnimationFrame(renderRafFrame);
+  };
+  if (!externalClock) raf = requestAnimationFrame(renderRafFrame);
 
   const disposeTree = (root: THREE.Object3D) => {
+    const textures = new Set<THREE.Texture>();
+    const materials = new Set<THREE.Material>();
+    const geometries = new Set<THREE.BufferGeometry>();
     root.traverse(obj => {
       const mesh = obj as THREE.Mesh;
-      if (mesh.geometry) mesh.geometry.dispose();
+      if (mesh.geometry) geometries.add(mesh.geometry);
       const mat = mesh.material;
       const disposeMaterial = (material: THREE.Material) => {
-        const textured = material as THREE.Material & { map?: THREE.Texture | null; roughnessMap?: THREE.Texture | null };
-        textured.map?.dispose();
-        textured.roughnessMap?.dispose();
-        material.dispose();
+        materials.add(material);
+        for (const value of Object.values(material)) if (value instanceof THREE.Texture) textures.add(value);
+        const uniforms = (material as THREE.ShaderMaterial).uniforms;
+        if (uniforms) for (const uniform of Object.values(uniforms)) if (uniform.value instanceof THREE.Texture) textures.add(uniform.value);
       };
       if (Array.isArray(mat)) mat.forEach(disposeMaterial); else if (mat) disposeMaterial(mat);
     });
+    for (const texture of textures) if (!texture.userData.sharedAsset && texture !== scene.environment) texture.dispose();
+    materials.forEach(material => material.dispose());
+    geometries.forEach(geometry => geometry.dispose());
   };
   const clearCampaign = () => {
     nightLighting?.dispose(); nightLighting = undefined;
@@ -334,14 +442,27 @@ export function createScene(container: HTMLElement): {
   };
 
   return {
-    diagnostics() { return { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, textures: renderer.info.memory.textures, geometries: renderer.info.memory.geometries, frameMs: lastFrameMs }; },
+    get canvas() { return renderer.domElement; },
+    diagnostics() { return {
+      calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, textures: renderer.info.memory.textures,
+      geometries: renderer.info.memory.geometries, frameMs: lastFrameMs, cpuSubmissionMs: lastFrameMs,
+      gpuMs: gpuTimer.milliseconds, estimatedSceneBytes: estimateSceneBytes(scene), renderTargetBytes: cinematic.estimatedBytes(),
+      ...frameHistory.read(), mode, qualityLevel: adaptive.level, targetFps: profile.targetFps,
+      pixelRatio: renderer.getPixelRatio(), width: renderer.domElement.width, height: renderer.domElement.height,
+      burnedTrees: world?.vegetationStats.burnedTrees ?? 0,
+      charredTrees: world?.vegetationStats.charredTrees ?? 0,
+      damageTriangles: world?.vegetationStats.damageTriangles ?? 0,
+    }; },
+    renderFrame,
+    renderScheduledFrame,
+    setQuality,
     update(state, campaign, mission) {
       const campaignChanged = !latestCampaign || latestCampaign.id !== campaign.id || !latestMission || latestMission.id !== mission.id;
       if (campaignChanged) {
         clearCampaign();
         latestCampaign = campaign;
         latestMission = mission;
-        world = createWorld(scene, campaign, mission);
+        world = createWorld(scene, campaign, mission, { textureAssets });
         createShip(scene, campaign, mission);
         vehicle = createAircraft(campaign);
         aircraft.add(vehicle.root);
@@ -349,9 +470,11 @@ export function createScene(container: HTMLElement): {
         proximityParticles = createProximityParticles(scene, campaign, mission);
         bucketRig = createBucketRig(scene);
         groundCrew = createGroundCrew(scene, campaign, mission);
-        fire = createFire(scene, mission, world.terrainHeight);
+        fire = createFire(scene, mission, world.terrainHeight, world.burnField);
         crashEffect = createCrashEffect(scene);
         createHeightFog(campaign.id === 'jp_ketapang_2026_09').apply(scene);
+        applyQuality();
+        adaptive.reset(); cadence.reset(); renderDirty = true;
         firstFrame = true;
         dropFraming = 0;
       } else {
@@ -359,7 +482,7 @@ export function createScene(container: HTMLElement): {
         const isFailed = state.phase === 'failed' || state.outcome === 'failed';
         const failureCause = (state as SimState & { failureCause?: string }).failureCause;
         if (!wasFailed && isFailed && failureCause === 'collision') {
-          crashEffect?.trigger(state.position, performance.now() / 1000);
+          crashEffect?.trigger(state.position, externalClock ? elapsedClock : performance.now() / 1000);
         }
       }
       previousPhase = state.phase;
@@ -372,7 +495,12 @@ export function createScene(container: HTMLElement): {
       resize.disconnect();
       clearCampaign();
       unsubscribeEffects();
+      unsubscribeQuality(); mobileQuery.removeEventListener('change', applyQuality);
       cinematic.dispose();
+      textureAssets.dispose();
+      environment.dispose();
+      gpuTimer.dispose();
+      sun.shadow.dispose();
       renderer.dispose();
       renderer.domElement.remove();
       hudStyle?.setProperty('--aircraft-hud-visible', '0');

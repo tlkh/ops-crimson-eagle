@@ -3,6 +3,8 @@ import type { Campaign } from '../types';
 import { createAircraft } from './aircraft';
 import { createShip } from './ships';
 import { createWater } from './water';
+import { createEnvironmentLighting } from './environmentLighting';
+import { evaluateTimeOfDay } from './timeOfDay';
 
 const WIDTH = 1200;
 const HEIGHT = 420;
@@ -40,6 +42,7 @@ function renderFleet(campaign: Campaign): string {
   const scene = new THREE.Scene();
   let renderer: THREE.WebGLRenderer | undefined;
   let water: ReturnType<typeof createWater> | undefined;
+  let environment: ReturnType<typeof createEnvironmentLighting> | undefined;
   try {
     scene.background = new THREE.Color('#cad9df');
     scene.fog = new THREE.Fog('#cad9df', 360, 1500);
@@ -107,10 +110,13 @@ function renderFleet(campaign: Campaign): string {
     renderer.toneMappingExposure = 1.02;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    environment = createEnvironmentLighting(renderer, scene);
+    environment.update(evaluateTimeOfDay(mission, mission.durationTargetSec * .5));
     renderer.render(scene, camera);
     return renderer.domElement.toDataURL('image/png');
   } finally {
     water?.dispose();
+    environment?.dispose();
     disposeScene(scene);
     renderer?.dispose();
     renderer?.forceContextLoss();

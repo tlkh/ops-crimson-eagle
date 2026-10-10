@@ -1,4 +1,4 @@
-const VERSION = 'crimson-eagle-v13';
+const VERSION = 'crimson-eagle-v15';
 const VOICE_CUES = [
   'go_lake', 'lake_descend', 'lake_climb', 'lake_slow', 'lake_align',
   'fetch_water', 'bucket_filling', 'bucket_full', 'load_limit', 'go_fire',
@@ -15,6 +15,8 @@ self.addEventListener('install', event => {
     './', './index.html', './manifest.webmanifest', './apple-touch-icon.png',
     './icon-192.png', './icon-512.png', './assets/crimson-eagle-mark.png',
     './assets/seruyan-satellite-fire.webp', './assets/ketapang-satellite-fire.webp',
+    './graphics/terrain-atlas.ktx2', './graphics/terrain-atlas.png',
+    './graphics/basis/basis_transcoder.js', './graphics/basis/basis_transcoder.wasm',
     './music/menu.mp3', './fonts/Rajdhani-Medium.ttf', './fonts/Rajdhani-SemiBold.ttf',
     ...VOICE_CUES.map(id => `./voice/${id}.mp3`),
   ])));
