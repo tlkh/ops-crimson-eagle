@@ -1,67 +1,24 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Campaign, Mission, SimState } from '../types';
-import { setRenderedTerrainHeights, setStructureColliders, setTreeColliders, terrainHeight as collisionTerrainHeight } from '../sim/collision';
+import { renderedTerrainHeight, setRenderedTerrainHeights, setStructureColliders, setTreeColliders, terrainHeight as collisionTerrainHeight, TERRAIN_GRID } from '../sim/collision';
 import type { StructureCollider, TreeCollider } from '../sim/collision';
 import { createAtmosphere } from './atmosphere';
 import { createWater } from './water';
 import { createCoastalDetails } from './coastalDetails';
 import { createCoastalSampler } from './coastalSampling';
+import { createGroundSurface } from './groundSurface';
+import { createLandUse } from './landUse';
+import { createVegetation } from './vegetation';
+import { createDistantScenery } from './distantScenery';
 
 type V = { x: number; z: number };
 const TAU = Math.PI * 2;
 const distance = (a: V, b: V) => Math.hypot(a.x - b.x, a.z - b.z);
-const distanceToLeg = (point: V, start: V, end: V) => {
-  const dx = end.x - start.x, dz = end.z - start.z;
-  const lengthSq = dx * dx + dz * dz;
-  const t = lengthSq ? Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.z - start.z) * dz) / lengthSq)) : 0;
-  return Math.hypot(point.x - start.x - t * dx, point.z - start.z - t * dz);
-};
 const seeded = (seed: number) => { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); };
 const material = (color: THREE.ColorRepresentation, roughness = .94) => new THREE.MeshStandardMaterial({ color, roughness });
 function block(parent: THREE.Object3D, size: [number, number, number], position: [number, number, number], mat: THREE.Material) {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(...size), mat);
   mesh.position.set(...position); mesh.receiveShadow = true; parent.add(mesh); return mesh;
-}
-
-// A small shared library of branch-supported crowns, not one sphere per tree.
-// Each template has five overlapping, asymmetrical foliage masses (100 triangles).
-function treeCrown(variant: number) {
-  const parts: THREE.BufferGeometry[] = [];
-  const rng = seeded(803 + variant * 59);
-  for (let i = 0; i < 5; i++) {
-    const a = i * 2.399 + variant, outer = i > 0;
-    const g = new THREE.IcosahedronGeometry(1, 0);
-    const position = g.getAttribute('position');
-    const shades: number[] = [];
-    for (let v = 0; v < position.count; v++) {
-      const x = position.getX(v), y = position.getY(v), z = position.getZ(v);
-      // Coordinate-based perturbations keep duplicate triangle vertices watertight.
-      const ripple = 1 + .11 * Math.sin(x * 13 + y * 7 + z * 11 + variant);
-      position.setXYZ(v, x * ripple, y * ripple, z * ripple);
-      const shade = .78 + (y + 1) * .11 + i * .012;
-      shades.push(shade * .96, shade, shade * .91);
-    }
-    g.setAttribute('color', new THREE.Float32BufferAttribute(shades, 3));
-    const width = outer ? .54 + rng() * .2 : .75;
-    g.scale(width, (variant === 1 ? .57 : variant === 2 ? .67 : .43) * (.8 + rng() * .4), width * (.82 + rng() * .25));
-    g.translate(outer ? Math.cos(a) * .58 : 0, outer ? (variant === 1 ? -.22 : -.12) + rng() * .43 : .2, outer ? Math.sin(a) * .58 : 0);
-    g.computeVertexNormals(); parts.push(g);
-  }
-  const result = mergeGeometries(parts)!; parts.forEach(g => g.dispose()); return result;
-}
-function treeWood() {
-  const pieces: THREE.BufferGeometry[] = [];
-  const stem = new THREE.CylinderGeometry(.18, .44, .88, 5, 1, true); stem.translate(0,.44,0); pieces.push(stem);
-  for (let i = 0; i < 3; i++) {
-    const a = i * TAU / 3 + .3;
-    const start = new THREE.Vector3(0,.52,0), end = new THREE.Vector3(Math.cos(a)*2.5,.98,Math.sin(a)*2.5);
-    const delta = end.clone().sub(start);
-    const branch = new THREE.CylinderGeometry(.06,.2,delta.length(),4,1,true);
-    branch.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),delta.normalize()));
-    branch.translate(...start.add(end).multiplyScalar(.5).toArray()); pieces.push(branch);
-  }
-  const result=mergeGeometries(pieces)!;pieces.forEach(g=>g.dispose());return result;
 }
 
 /** Reference-informed, deliberately compressed lowland composition; not surveyed geography.
@@ -85,46 +42,52 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   });
   const coast = coastalSampler.coastStart;
   const coastAt = coastalSampler.coastAt;
-  const inland = 6500, lateral = 4700;
+  const { inland, lateral, cols, rows } = TERRAIN_GRID;
   // One height field drives both the visible mesh and the aircraft collision
   // envelope. A null result is open water, which this land mesh never samples.
   const terrainHeight = (x: number, z: number) => collisionTerrainHeight(campaign, mission, x, z) ?? -9;
   const water = createWater(scene, campaign, mission, { reflections: !options.preview });
   water.surface(new THREE.PlaneGeometry(80000, 80000), 0, new THREE.Vector3(0, -9, 0));
 
-  // Small repeating ground grain provides scale without a large downloaded texture.
-  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    const data = ctx.createImageData(128, 128);
-    for (let i = 0; i < data.data.length; i += 4) {
-      const n = 190 + random() * 65;
-      data.data[i] = n; data.data[i + 1] = n; data.data[i + 2] = n; data.data[i + 3] = 255;
-    }
-    ctx.putImageData(data, 0, 0);
-  }
-  const grain = new THREE.CanvasTexture(canvas); grain.wrapS = grain.wrapT = THREE.RepeatWrapping;
-  grain.repeat.set(95, 65); grain.colorSpace = THREE.SRGBColorSpace;
-  const positions: number[] = [], heights: number[] = [], colors: number[] = [], uvs: number[] = [], indices: number[] = [];
-  const cols = 96, rows = 112;
+  const groundSurface = createGroundSurface();
+  const positions: number[] = [], heights: number[] = [], colors: number[] = [], biomeWeights: number[] = [], uvs: number[] = [], indices: number[] = [];
+  const smoothstep = (low: number, high: number, value: number) => {
+    const v = THREE.MathUtils.clamp((value - low) / (high - low), 0, 1);
+    return v * v * (3 - 2 * v);
+  };
+  const riverS = (t: number) => -850 + 120 * Math.sin(t * .0021) + 75 * Math.sin(t * .0053);
   for (let row = 0; row <= rows; row++) {
     const s = -lateral + row / rows * lateral * 2;
     for (let col = 0; col <= cols; col++) {
       const t = coastAt(s) + col / cols * (inland - coastAt(s));
       const p = fromLocal(t, s), height = terrainHeight(p.x, p.z);
       positions.push(p.x, height, p.z); heights.push(height); uvs.push(row / rows, col / cols);
-      const wet = Math.sin(t * .009 + s * .004) + Math.cos(s * .007 - t * .002);
-      const c = new THREE.Color(col === 0 ? '#938977' : col === 1 ? '#7c8060' : wet > .6 ? '#536947' : wet < -.8 ? '#7b8055' : '#62724b');
-      c.offsetHSL(0, 0, (random() - .5) * .035); colors.push(c.r, c.g, c.b);
+      const shoreDistance = t - coastAt(s);
+      const lakeDistance = distance(p, mission.lake) - mission.lake.radius;
+      const riverDistance = Math.abs(s - riverS(t));
+      const shoreSand = 1 - smoothstep(18, 170, shoreDistance);
+      const lakeSand = (1 - smoothstep(0, 62, Math.abs(lakeDistance))) * .6;
+      const sandWeight = Math.max(shoreSand, lakeSand);
+      const wetPatch = .5 + .5 * Math.sin(t * .0067 + Math.sin(s * .004) * 1.6) * Math.cos(s * .0061 - t * .002);
+      const peatWeight = (1 - sandWeight) * THREE.MathUtils.clamp(
+        .24 + wetPatch * .51 + (1 - smoothstep(50, 215, riverDistance)) * .22 - Math.max(0, height - 12) * .012,
+        .08, .82,
+      );
+      const grassWeight = Math.max(0, 1 - peatWeight - sandWeight);
+      biomeWeights.push(grassWeight, peatWeight, sandWeight);
+      const c = new THREE.Color('#5e7548').multiplyScalar(grassWeight)
+        .add(new THREE.Color('#625a43').multiplyScalar(peatWeight))
+        .add(new THREE.Color('#a19570').multiplyScalar(sandWeight));
+      c.offsetHSL(0, 0, (random() - .5) * .036); colors.push(c.r, c.g, c.b);
       if (col < cols && row < rows) { const a = row * (cols + 1) + col, b = a + cols + 1; indices.push(a, b, a + 1, b, b + 1, a + 1); }
     }
   }
   setRenderedTerrainHeights(mission, heights);
-  const terrain = new THREE.BufferGeometry(); terrain.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); terrain.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3)); terrain.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2)); terrain.setIndex(indices); terrain.computeVertexNormals();
-  const land = new THREE.Mesh(terrain, new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, map: grain, roughness: 1 })); land.receiveShadow = true; scene.add(land);
+  const terrain = new THREE.BufferGeometry(); terrain.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3)); terrain.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3)); terrain.setAttribute('groundBiome', new THREE.Float32BufferAttribute(biomeWeights, 3)); terrain.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2)); terrain.setIndex(indices); terrain.computeVertexNormals();
+  const land = new THREE.Mesh(terrain, groundSurface.material); land.receiveShadow = true; scene.add(land);
 
   // Retain the entire authored refill disc; extend irregular bays away from the operational fire area.
-  const lakeLocal = local(mission.lake), r = mission.lake.radius;
+  const r = mission.lake.radius;
   const lakeRadius = (a: number) => r * (1.02 + .025 * (1 + Math.sin(a * 5 + .8)) + .04 * Math.pow(Math.max(0, Math.cos(a - Math.PI)), 4));
   const lakeBoundary = (scale: number) => {
     const pts: THREE.Vector2[] = [];
@@ -136,7 +99,6 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   const lake = water.surface(lakeBoundary(1), 1, new THREE.Vector3(mission.lake.x, .025, mission.lake.z));
 
   // A separate river/drainage corridor to one side of the gameplay route. No invented named river.
-  const riverS = (t: number) => -850 + 120 * Math.sin(t * .0021) + 75 * Math.sin(t * .0053);
   const ribbon = (width: number, y: number, mat: THREE.Material) => {
     const verts: number[] = [], idx: number[] = [];
     for (let i = 0; i <= 100; i++) {
@@ -148,91 +110,36 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   };
   ribbon(jp ? 68 : 48, -.12, material('#7e7659')); ribbon(jp ? 56 : 38, .015, water.riverMaterial);
 
-  // Layered broadleaf, narrow swamp and spreading coastal crowns share four instanced draws.
-  const count = 11500;
-  const trunks = new THREE.InstancedMesh(treeWood(), material('#ffffff'), count);
-  const crowns = [0,1,2].map(v => new THREE.InstancedMesh(treeCrown(v), new THREE.MeshStandardMaterial({color:'#ffffff',vertexColors:true,roughness:1}), count));
-  const crownCounts = [0,0,0];
-  const roots = new THREE.InstancedMesh(new THREE.CylinderGeometry(.08,.22,1,4,1,true),material('#605b49'),2400);
-  let rootCount=0;
-  const dummy = new THREE.Object3D(); let made = 0;
-  const treeColliders: TreeCollider[] = [];
-  const inWater = (p: V) => { const x = p.x - mission.lake.x, z = -(p.z - mission.lake.z); return Math.hypot(x, z) < lakeRadius(Math.atan2(z, x)) * 1.09; };
-  const settlementLocal = { t: lakeLocal.t + 25, s: lakeLocal.s + r * 1.2 + 65 };
-  for (let tries = 0; made < count && tries < count * 7; tries++) {
-    // Most canopy is concentrated where the player flies; distant forest supplies the horizon.
-    const near = random() < .8;
-    const t = coast + 100 + random() * (near ? 2400 : inland - coast - 100), s = (random() - .5) * (near ? 2600 : 8500);
-    const p = fromLocal(t, s);
-    let corridorDistance = Infinity;
-    for (const [a, b] of flightLegs) corridorDistance = Math.min(corridorDistance, distanceToLeg(p, a, b));
-    if (t < coastAt(s) + 65 || inWater(p) || Math.abs(s - riverS(t)) < 88 || corridorDistance < 58 || campaign.missions.some(m => distance(p, m.fire) < m.fire.radius + 40) || (mission.shore && distance(p, mission.shore) < 900) || Math.hypot(t - settlementLocal.t, s - settlementLocal.s) < 110) continue;
-    const patch = Math.sin(t * .006) * Math.cos(s * .005) + Math.sin((s + t) * .013) * .3;
-    if (patch < -.55 && random() < .82) continue;
-    const coastal = t - coastAt(s) < 220;
-    const h = corridorDistance < 125 ? 4 + random() * 4 : coastal ? 4 + random() * 5 : 11 + random() * 14;
-    const ground = terrainHeight(p.x,p.z), yaw=random()*TAU;
-    // Tree height and crown width are correlated, with occasional emergent individuals.
-    const radius = coastal ? 2.6+random()*2 : h*(.23+random()*.1);
-    treeColliders.push({ x: p.x, z: p.z, ground, height: h, radius });
-    dummy.position.set(p.x,ground,p.z); dummy.rotation.set(0,yaw,0);
-    dummy.scale.set(radius*.23,h,radius*.23);dummy.updateMatrix();trunks.setMatrixAt(made,dummy.matrix);
-    trunks.setColorAt(made,new THREE.Color().setHSL(.09,.17,.24+random()*.07).convertSRGBToLinear());
-    const variant=coastal?2:random()<.36?1:0;
-    dummy.position.y=ground+h*.96;dummy.scale.set(radius*(.85+random()*.25),radius*(variant===1?1.15:.9)*(.78+random()*.5),radius*(.8+random()*.4));dummy.updateMatrix();
-    crowns[variant].setMatrixAt(crownCounts[variant],dummy.matrix);
-    // HSL values are authored as display colours; convert to linear like the hex materials.
-    // Otherwise instance colours become chalky under the bright hemisphere lighting.
-    // Nearby trees share a subdued stand colour; each tree retains a small variation.
-    crowns[variant].setColorAt(crownCounts[variant]++,new THREE.Color().setHSL(.255+Math.sin(t*.003+s*.002)*.016+random()*.012,.3+random()*.12,.24+random()*.065).convertSRGBToLinear());
-    if(coastal&&rootCount+4<=2400)for(let k=0;k<4;k++){
-      const a=yaw+k*TAU/4, start=new THREE.Vector3(p.x,ground+h*.32,p.z),end=new THREE.Vector3(p.x+Math.cos(a)*2.1,ground,p.z+Math.sin(a)*2.1);
-      const delta=end.clone().sub(start);dummy.position.copy(start.add(end).multiplyScalar(.5));dummy.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),delta.clone().normalize());dummy.scale.set(1,delta.length(),1);dummy.updateMatrix();roots.setMatrixAt(rootCount++,dummy.matrix);
-    }
-    made++;
-  }
-  trunks.count=made;crowns.forEach((mesh,i)=>mesh.count=crownCounts[i]);roots.count=rootCount;scene.add(trunks,...crowns,roots);
-
-
-  // Distinct understory, mangrove scrub and palms complement the taller broadleaf canopy.
-  const shrubs = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1,0),material('#687448'),1800);
-  const reeds = new THREE.InstancedMesh(new THREE.ConeGeometry(.7,1,4),material('#8b8c59'),1100);
-  const palmTrunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(.22,.4,1,6),material('#75634c'),180);
-  const frondGeometry = new THREE.BufferGeometry(), frondVertices:number[]=[];
-  // A bowed rachis with separated paired pinnae: visible feathery edges, not solid paddles.
-  for(let i=0;i<12;i++){
-    const t=.08+i/12*.87,z=t*6,y=.8*Math.sin(t*Math.PI)-1.5*t*t,w=1.05*Math.sin(t*Math.PI)*(.95-i*.025);
-    for(const side of [-1,1])frondVertices.push(0,y,z, side*w,y-.18,z+.55, side*.07,y-.1,z+.29);
-  }
-  frondGeometry.setAttribute('position',new THREE.Float32BufferAttribute(frondVertices,3));frondGeometry.computeVertexNormals();
-  const fronds = new THREE.InstancedMesh(frondGeometry,new THREE.MeshStandardMaterial({color:'#526b39',roughness:.95,side:THREE.DoubleSide}),1260);
-  let shrubCount=0,reedCount=0,palmCount=0;
-  for(let i=0;i<3500;i++) {
-    const t=coast+110+random()*2600,s=(random()-.5)*2600,p=fromLocal(t,s);
-    if(t<coastAt(s)+65||Math.hypot(t-settlementLocal.t,s-settlementLocal.s)<110||inWater(p)||Math.abs(s-riverS(t))<85||campaign.missions.some(m=>distance(p,m.fire)<m.fire.radius+20)||(mission.shore&&distance(p,mission.shore)<900))continue;
-    if(shrubCount<1800){dummy.position.set(p.x,terrainHeight(p.x,p.z)+.7,p.z);dummy.scale.set(1.5+random()*2,.7+random(),1.5+random()*2);dummy.rotation.set(0,random()*TAU,0);dummy.updateMatrix();shrubs.setMatrixAt(shrubCount++,dummy.matrix);}
-    const corridor=Math.min(...flightLegs.map(([a,b])=>distanceToLeg(p,a,b)));
-    if(palmCount<180&&corridor>140&&random()<.16){const h=7+random()*8,palmGround=terrainHeight(p.x,p.z);dummy.position.set(p.x,palmGround+h*.5,p.z);dummy.scale.set(1,h,1);dummy.rotation.set(.03,random()*TAU,.03);dummy.updateMatrix();palmTrunks.setMatrixAt(palmCount,dummy.matrix);const tip=new THREE.Vector3(0,.5,0).applyMatrix4(dummy.matrix);for(let f=0;f<7;f++){dummy.position.copy(tip);dummy.scale.setScalar(.65+random()*.3);dummy.rotation.set(0,f/7*TAU+random()*.2,0);dummy.updateMatrix();fronds.setMatrixAt(palmCount*7+f,dummy.matrix);}treeColliders.push({x:p.x,z:p.z,ground:palmGround,height:h,radius:4.5});palmCount++;}
-  }
-  for(let i=0;i<1100;i++){const a=random()*TAU,rad=lakeRadius(a)*(1.025+random()*.06);const x=mission.lake.x+Math.cos(a)*rad,z=mission.lake.z-Math.sin(a)*rad;dummy.position.set(x,.45,z);dummy.scale.set(.35+random()*.5,.8+random()*1.4,.35+random()*.5);dummy.rotation.set(0,random()*TAU,0);dummy.updateMatrix();reeds.setMatrixAt(reedCount++,dummy.matrix);}
-  shrubs.count=shrubCount;reeds.count=reedCount;palmTrunks.count=palmCount;fronds.count=palmCount*7;scene.add(shrubs,reeds,palmTrunks,fronds);
-  const timber = material('#79684c'), roof = material('#777d73'), wall = material('#b7aa8e'), dark = material('#343d36');
+  const isLake = (p: V) => {
+    const x = p.x - mission.lake.x, z = -(p.z - mission.lake.z);
+    return Math.hypot(x, z) < lakeRadius(Math.atan2(z, x)) * 1.09;
+  };
+  // Land uses are placed before woodland so orchards, lanes and farmyards
+  // remain visible. Every solid object feeds the shared collision registry.
+  const landUse = createLandUse(scene, campaign, mission, {
+    fromLocal,
+    terrainHeight: (x, z) => renderedTerrainHeight(campaign, mission, x, z) ?? terrainHeight(x, z),
+    renderedTerrainHeight: (x, z) => renderedTerrainHeight(campaign, mission, x, z),
+    coastAt,
+    flightLegs,
+    lake: mission.lake,
+    river: { centerS: riverS, halfWidth: jp ? 68 : 48 },
+    shore: mission.shore,
+  });
+  const vegetation = createVegetation(scene, campaign, mission, {
+    fromLocal,
+    local,
+    terrainHeight: (x, z) => renderedTerrainHeight(campaign, mission, x, z) ?? terrainHeight(x, z),
+    coastAt,
+    isLake,
+    riverS,
+    flightLegs,
+    settlementExclusions: [],
+    farmExclusions: landUse.exclusionZones.map(zone => ({ center: { x: zone.x, z: zone.z }, radius: zone.radius })),
+    visualTier: options.preview || window.matchMedia('(max-width: 768px), (pointer: coarse)').matches ? 'reduced' : 'full',
+  });
+  const roof = material('#777d73'), wall = material('#b7aa8e');
   const solidStructures: Array<{ object: THREE.Object3D; label: string }> = [];
-  const settlement = new THREE.Group(); const village = fromLocal(settlementLocal.t, settlementLocal.s);
-  settlement.position.set(village.x, 0, village.z); settlement.rotation.y = Math.atan2(ux, uz);
-  // Long roadside/lakeside arrangement with raised floors and gabled sheet roofs.
-  for (let i = 0; i < 12; i++) {
-    const home = new THREE.Group(), x = (i % 2 ? 1 : -1) * 20, z = (Math.floor(i / 2) - 2.5) * 24;
-    home.position.set(x, 0, z); block(home, [10, 3.7, 15], [0, 3.55, 0], wall);
-    for (const px of [-4, 4]) for (const pz of [-6, 6]) block(home, [.35, 2, .35], [px, .8, pz], timber);
-    for (const side of [-1, 1]) { const slope = block(home, [6, .18, 17], [side * 2.65, 6.15, 0], roof); slope.rotation.z = side * -.37; }
-    block(home, [1.5, 2.5, .12], [0, 3.1, -7.56], dark); block(home, [2.2, 1.25, .12], [3.0, 4, -7.56], dark); settlement.add(home);
-    solidStructures.push({ object: home, label: 'settlement' });
-  }
-  block(settlement, [7, .09, 180], [0, -.05, 0], material('#a79770'));
-  block(settlement, [110, .28, 2.8], [85, 1.1, 0], timber);
-  for (let i = 0; i < 9; i++) block(settlement, [.4, 2.6, .4], [35 + i * 12, -.1, 0], timber);
-  scene.add(settlement);
   if (mission.shore) {
     // Representative apron at the authored pad; dimensions informed by DGCA facilities listing.
     const apron = new THREE.Group(); apron.position.set(mission.shore.x, 0, mission.shore.z); apron.rotation.y = Math.atan2(ux, uz);
@@ -268,7 +175,12 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     scene.add(apron);
   }
   const coastalDetails = createCoastalDetails(scene, campaign, mission, coastalSampler, flightLegs);
-  treeColliders.push(...coastalDetails.treeColliders);
+  const distantScenery = createDistantScenery(scene, campaign, mission, { preview: options.preview });
+  const treeColliders: TreeCollider[] = [
+    ...vegetation.treeColliders,
+    ...landUse.treeColliders,
+    ...coastalDetails.treeColliders,
+  ];
   setTreeColliders(mission, treeColliders);
   const structureColliders: StructureCollider[] = solidStructures.map(({ object, label }) => {
     object.updateWorldMatrix(true, true);
@@ -283,7 +195,7 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
       label,
     };
   });
-  structureColliders.push(...coastalDetails.structureColliders);
+  structureColliders.push(...landUse.structureColliders, ...coastalDetails.structureColliders);
   setStructureColliders(mission, structureColliders);
   return {
     update(time: number, camera?: THREE.Vector3, state?: SimState, nightStrength = 0) {
@@ -291,7 +203,9 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
       atmosphere.update(time, camera, state);
       coastalDetails.update(time, nightStrength);
     },
-    dispose() { coastalDetails.dispose(); water.dispose(); },
-    terrainHeight, lake, shore, boats: coastalDetails.boats, coastalStats: coastalDetails.stats, coastalLightingAnchor: coastalDetails.lightingAnchor, route: { ux, uz, sx, sz, routeLength },
+    dispose() { distantScenery.dispose(); coastalDetails.dispose(); landUse.dispose(); vegetation.dispose(); water.dispose(); groundSurface.dispose(); },
+    terrainHeight, lake, shore, boats: coastalDetails.boats, coastalStats: coastalDetails.stats,
+    vegetationStats: vegetation.stats, landUseStats: landUse.stats,
+    coastalLightingAnchor: coastalDetails.lightingAnchor, route: { ux, uz, sx, sz, routeLength },
   };
 }

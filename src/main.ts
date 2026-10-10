@@ -1,5 +1,5 @@
 import { campaigns, getCampaign, getMission, validateContent } from './content';
-import { createSim, distance2D, estimateLandingFuel, getObjectiveAction, stepSim } from './sim';
+import { checkpointIntersectsWorld, createSim, distance2D, estimateLandingFuel, getObjectiveAction, stepSim } from './sim';
 import { createScene } from './render';
 import { createUI } from './ui';
 import { clearCheckpoint, loadCheckpoint, saveCheckpoint, writeProgress } from './persistence';
@@ -7,6 +7,7 @@ import { GameAudio } from './audio';
 import { MissionRadioDirector } from './missionRadio';
 import type { MusicTrackId } from './music';
 import type { Campaign, CampaignId, FlightCommand, Mission, SimState } from './types';
+import { WORLD_REVISION } from './worldRevision';
 import './style.css';
 import './ui/menu.css';
 import './ui/flightRefinement.css';
@@ -80,7 +81,7 @@ async function selectMission(campaignId: CampaignId, missionId: string) {
   if (!nextCampaign || !nextMission) return;
   await saving.catch(() => undefined);
   const saved = await loadCheckpoint(campaignId);
-  const nextState = saved?.missionId === missionId && saved.phase !== 'debrief' && saved.phase !== 'failed'
+  let nextState = saved?.missionId === missionId && saved.phase !== 'debrief' && saved.phase !== 'failed'
     ? saved : createSim(nextCampaign, nextMission);
   const sceneHost = ui.getSceneHost();
   const previousSceneNodes = new Set(sceneHost.childNodes);
@@ -95,6 +96,19 @@ async function selectMission(campaignId: CampaignId, missionId: string) {
   }
   scene?.dispose();
   scene = nextScene;
+  if (nextState === saved && saved?.worldRevision !== WORLD_REVISION) {
+    // Scene construction registers the exact terrain and solid scenery for the
+    // mission before the legacy save is checked. Only an obstructed sortie is
+    // restarted; completed campaign progress is stored separately.
+    nextScene.update(nextState, nextCampaign, nextMission);
+    if (checkpointIntersectsWorld(nextState, nextCampaign, nextMission)) {
+      nextState = createSim(nextCampaign, nextMission);
+      nextState.message = 'Map updated: this saved sortie restarted at the launch point.';
+      nextState.messageUntil = 8;
+    } else {
+      nextState.worldRevision = WORLD_REVISION;
+    }
+  }
   campaign = nextCampaign;
   mission = nextMission;
   state = nextState;

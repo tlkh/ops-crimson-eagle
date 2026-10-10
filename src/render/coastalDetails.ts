@@ -13,7 +13,7 @@ export interface CoastalDetailsResult {
   structureColliders: StructureCollider[];
   boats: THREE.Group;
   lightingAnchor?: { x: number; y: number; z: number };
-  stats: { coastalDrawCalls: number; coastalTriangles: number; boatCount: number; mangroveCount: number; grassCount: number };
+  stats: { coastalDrawCalls: number; coastalTriangles: number; boatCount: number; mangroveCount: number; mangrovePocketCount: number; grassCount: number; footpathSegments: number; coastalYardCount: number };
   update(time: number, nightStrength?: number): void;
   dispose(): void;
 }
@@ -281,32 +281,48 @@ export function createCoastalDetails(
   }
   grassMeshes.forEach((mesh, i) => { mesh.count = grassCounts[i]; mesh.instanceMatrix.needsUpdate = true; });
 
-  // Short coastal-root trees occur in small stands, with colliders matching every visible instance.
-  for (let tries = 0; mangroveCount < 130 && tries < 1900; tries++) {
-    const s = -4050 + random() * 8100;
-    const t = sampler.coastAt(s) + 20 + random() * 145;
-    const p = sampler.fromLocal(t, s), placement = plantSpot(p);
-    if (!placement || routeClearance(p) < 185 || isProtected(p, 250)) continue;
-    const height = 3.2 + random() * 1.6, radius = 2.3 + random() * .6, yaw = random() * TAU;
-    dummy.position.set(p.x, placement.ground, p.z); dummy.rotation.set(0, yaw, 0); dummy.scale.setScalar(.85 + random() * .3); dummy.updateMatrix();
-    mangroves.setMatrixAt(mangroveCount, dummy.matrix);
-    dummy.position.set(p.x, placement.ground + height, p.z); dummy.scale.set(radius * 1.4, height * .42, radius * 1.4); dummy.rotation.set(0, yaw, 0); dummy.updateMatrix();
-    mangroveCrowns.setMatrixAt(mangroveCount, dummy.matrix);
-    mangroves.setColorAt(mangroveCount, new THREE.Color().setHSL(.09, .16, .23 + random() * .05).convertSRGBToLinear());
-    mangroveCrowns.setColorAt(mangroveCount, new THREE.Color().setHSL(.26 + random() * .035, .31, .22 + random() * .06).convertSRGBToLinear());
-    treeColliders.push({ x: p.x, z: p.z, ground: placement.ground, height: height + 2.3, radius: radius * 1.4 });
-    mangroveCount++;
+  // Short coastal-root trees form irregular stands with open breaks between them. Each tree is
+  // still checked against route and objective buffers, and its collider follows the instance.
+  let mangrovePocketCount = 0;
+  for (let pocket = 0; pocket < 34 && mangroveCount < 130; pocket++) {
+    const centerS = -4050 + random() * 8100;
+    const centerD = 24 + random() * 138;
+    const center = sampler.fromLocal(sampler.coastAt(centerS) + centerD, centerS);
+    if (!safePoint(center, 235) || routeClearance(center) < 235 || isProtected(center, 250)) continue;
+    let pocketTrees = 0;
+    const wanted = 4 + Math.floor(random() * 6);
+    for (let member = 0; member < wanted && mangroveCount < 130; member++) {
+      const s = centerS + (random() - .5) * 72;
+      const t = sampler.coastAt(s) + centerD + (random() - .5) * 34;
+      const p = sampler.fromLocal(t, s), placement = plantSpot(p);
+      if (!placement || routeClearance(p) < 185 || isProtected(p, 250)) continue;
+      const height = 3.2 + random() * 1.6, radius = 2.3 + random() * .6, yaw = random() * TAU;
+      dummy.position.set(p.x, placement.ground, p.z); dummy.rotation.set(0, yaw, 0); dummy.scale.setScalar(.85 + random() * .3); dummy.updateMatrix();
+      mangroves.setMatrixAt(mangroveCount, dummy.matrix);
+      dummy.position.set(p.x, placement.ground + height, p.z); dummy.scale.set(radius * 1.4, height * .42, radius * 1.4); dummy.rotation.set(0, yaw, 0); dummy.updateMatrix();
+      mangroveCrowns.setMatrixAt(mangroveCount, dummy.matrix);
+      mangroves.setColorAt(mangroveCount, new THREE.Color().setHSL(.09, .16, .23 + random() * .05).convertSRGBToLinear());
+      mangroveCrowns.setColorAt(mangroveCount, new THREE.Color().setHSL(.26 + random() * .035, .31, .22 + random() * .06).convertSRGBToLinear());
+      treeColliders.push({ x: p.x, z: p.z, ground: placement.ground, height: height + 2.3, radius: radius * 1.4 });
+      mangroveCount++;
+      pocketTrees++;
+    }
+    if (pocketTrees >= 3) mangrovePocketCount++;
   }
   mangroves.count = mangroveCount; mangroveCrowns.count = mangroveCount;
   mangroves.instanceMatrix.needsUpdate = true; mangroveCrowns.instanceMatrix.needsUpdate = true;
 
-  for (let tries = 0; shrubCount < 210 && tries < 1100; tries++) {
-    const s = -4050 + random() * 8100, t = sampler.coastAt(s) + 10 + random() * 130;
-    const p = sampler.fromLocal(t, s), placement = plantSpot(p);
-    if (!placement) continue;
-    dummy.position.set(p.x, placement.ground + .42, p.z);
-    dummy.scale.set(1.2 + random() * 1.2, .55 + random() * .45, 1.2 + random() * 1.2);
-    dummy.rotation.set(0, random() * TAU, 0); dummy.updateMatrix(); shrubs.setMatrixAt(shrubCount++, dummy.matrix);
+  for (let patch = 0; patch < 78 && shrubCount < 210; patch++) {
+    const centerS = -4050 + random() * 8100, centerT = sampler.coastAt(centerS) + 18 + random() * 145;
+    const count = 2 + Math.floor(random() * 5);
+    for (let member = 0; member < count && shrubCount < 210; member++) {
+      const s = centerS + (random() - .5) * 34, t = centerT + (random() - .5) * 28;
+      const p = sampler.fromLocal(t, s), placement = plantSpot(p);
+      if (!placement) continue;
+      dummy.position.set(p.x, placement.ground + .42, p.z);
+      dummy.scale.set(1.2 + random() * 1.2, .55 + random() * .45, 1.2 + random() * 1.2);
+      dummy.rotation.set(0, random() * TAU, 0); dummy.updateMatrix(); shrubs.setMatrixAt(shrubCount++, dummy.matrix);
+    }
   }
   shrubs.count = shrubCount; shrubs.instanceMatrix.needsUpdate = true;
 
@@ -358,6 +374,8 @@ export function createCoastalDetails(
   let lampMesh: THREE.Mesh | undefined;
   let lampMaterial: THREE.MeshStandardMaterial | undefined;
   let lightingAnchor: { x: number; y: number; z: number } | undefined;
+  let footpathSegments = 0;
+  let coastalYardCount = 0;
   if (structureAnchor) {
     const { s } = structureAnchor;
     const parts: THREE.BufferGeometry[] = [];
@@ -424,14 +442,106 @@ export function createCoastalDetails(
     const lampDeck = Math.max(SEA_SURFACE_Y + 1.15, lampGround + .72);
     for (const x of [-3.2, 3.2]) addBox(parts, [.18, 2.1, .18], [x, lampDeck + 1.05, lampD - 47], '#584a36');
 
+    // Preserve a tight collision box for the hut and pier before adding the inland yard to the
+    // same merged draw call. The path is ground-level dressing; the shed and fence get their own
+    // world-aligned structure bounds below.
+    const hutOnlyGeometry = merge(parts.map(part => part.clone()));
+    const hutOnlyMesh = new THREE.Mesh(hutOnlyGeometry);
+    hutOnlyMesh.position.set(structureAnchor.x, 0, structureAnchor.z);
+    const tAxis = sampler.fromLocal(1, 0);
+    const structureYaw = Math.atan2(tAxis.x - mission.ship.x, tAxis.z - mission.ship.z);
+    hutOnlyMesh.rotation.y = structureYaw;
+    structureColliders.push(colliderFor(hutOnlyMesh, 'coastal stilt hut and jetty'));
+    hutOnlyGeometry.dispose();
+
+    const localPoint = (x: number, z: number) => sampler.fromLocal(hutT + z, s - x);
+    const localGround = (x: number, z: number) => coastGround(hutT + z, s - x).ground;
+    const footprintIsSafe = (x: number, z: number, halfX: number, halfZ: number) =>
+      [[x, z], [x - halfX, z - halfZ], [x - halfX, z + halfZ], [x + halfX, z - halfZ], [x + halfX, z + halfZ]]
+        .every(([localX, localZ]) => {
+          const point = localPoint(localX, localZ);
+          return safePoint(point, 470) && routeClearance(point) > 470;
+        });
+    const localCollider = (x: number, z: number, halfX: number, halfZ: number, bottom: number, top: number, label: string): StructureCollider => {
+      const center = localPoint(x, z), xAxis = localPoint(x + 1, z), zAxis = localPoint(x, z + 1);
+      return {
+        x: center.x,
+        z: center.z,
+        halfWidth: Math.abs(xAxis.x - center.x) * halfX + Math.abs(zAxis.x - center.x) * halfZ,
+        halfLength: Math.abs(xAxis.z - center.z) * halfX + Math.abs(zAxis.z - center.z) * halfZ,
+        bottom,
+        top,
+        label,
+      };
+    };
+
+    // A thin packed-earth track leaves the hut for a little inland work yard. Sample each section
+    // from the rendered terrain and break the line around the natural scrub rather than paving it.
+    const yardCandidates: Array<[number, number]> = [[-35, 58], [36, 66], [-42, 104], [43, 112], [-18, 128]];
+    const yard = yardCandidates.find(([x, z]) => footprintIsSafe(x, z, 20, 22));
+    if (yard) {
+      const [yardX, yardZ] = yard;
+      const yardGround = localGround(yardX, yardZ);
+      if (yardGround !== null) {
+        addBox(parts, [37, .055, 42], [yardX, yardGround + .025, yardZ], '#81795f');
+        const shedX = yardX, shedZ = yardZ + 1, shedGround = localGround(shedX, shedZ);
+        if (shedGround !== null) {
+          const halfShedX = 10, halfShedZ = 9.7;
+          // Raised timber floor, open boat-store front, weatherboard sides, and a deep split roof.
+          addBox(parts, [14, .2, 17], [shedX, shedGround + .55, shedZ], '#77694f');
+          for (const sideX of [-1, 1]) for (const sideZ of [-1, 1]) {
+            addBox(parts, [.28, 1.25, .28], [shedX + sideX * 6.2, shedGround + .9, shedZ + sideZ * 7.5], '#5c503d');
+          }
+          addBox(parts, [13.2, 3.2, .32], [shedX, shedGround + 2.25, shedZ - 8.25], '#968a70');
+          for (const sideX of [-1, 1]) addBox(parts, [.32, 3.2, 16], [shedX + sideX * 6.55, shedGround + 2.25, shedZ], '#968a70');
+          addBox(parts, [8.2, .2, 18.4], [shedX - 2.3, shedGround + 4.05, shedZ], '#687268', .43);
+          addBox(parts, [8.2, .2, 18.4], [shedX + 2.3, shedGround + 4.05, shedZ], '#687268', -.43);
+          // A pair of low cradles and a restrained upturned skiff suggest everyday boat upkeep.
+          for (const rackZ of [-2.8, 2.8]) {
+            addBox(parts, [1.1, .16, 8], [shedX - 2.1, shedGround + 1.25, shedZ + rackZ], '#5f513d');
+            addBox(parts, [1.1, .16, 8], [shedX + 2.1, shedGround + 1.25, shedZ + rackZ], '#5f513d');
+          }
+          addBox(parts, [1.35, .34, 7.2], [shedX, shedGround + 1.53, shedZ], '#765c43');
+          addCylinder(parts, .36, 1.1, [shedX + 4.8, shedGround + .95, shedZ + 5.2], '#647267');
+          structureColliders.push(localCollider(shedX, shedZ, halfShedX, halfShedZ, shedGround, shedGround + 6, 'coastal boat store shed'));
+          coastalYardCount++;
+        }
+
+        const pathLength = Math.max(1, yardZ - 17), segments = Math.ceil(pathLength / 5.5);
+        for (let segment = 0; segment < segments; segment++) {
+          const progress = (segment + .5) / segments;
+          const z = 17 + progress * pathLength;
+          const x = yardX * progress + Math.sin(progress * Math.PI * 2.1) * 4.2;
+          const point = localPoint(x, z), ground = localGround(x, z);
+          if (ground === null || !safePoint(point, 390)) continue;
+          addBox(parts, [2.35, .065, pathLength / segments + .35], [x, ground + .035, z], segment % 3 === 0 ? '#93876a' : '#897f64');
+          footpathSegments++;
+        }
+
+        // Three sides of a low, open fishing-yard fence keep the path mouth clear. A single
+        // conservative bound covers its connected rails and posts for aircraft collision checks.
+        if (footprintIsSafe(yardX, yardZ, 20, 22)) {
+          const fenceBottom = yardGround, fenceTop = yardGround + 1.55;
+          for (const sideX of [-18, 18]) {
+            for (const postZ of [-10, 0, 10]) addBox(parts, [.2, 1.55, .2], [yardX + sideX, fenceBottom + .78, yardZ + postZ], '#5c503d');
+            addBox(parts, [.16, .14, 21], [yardX + sideX, fenceBottom + 1.05, yardZ], '#6d5b43');
+            addBox(parts, [.16, .14, 21], [yardX + sideX, fenceBottom + .48, yardZ], '#6d5b43');
+          }
+          for (const postX of [-9, 0, 9]) addBox(parts, [.2, 1.55, .2], [yardX + postX, fenceBottom + .78, yardZ + 20], '#5c503d');
+          addBox(parts, [38, .14, .16], [yardX, fenceBottom + 1.05, yardZ + 20], '#6d5b43');
+          addBox(parts, [38, .14, .16], [yardX, fenceBottom + .48, yardZ + 20], '#6d5b43');
+          structureColliders.push(localCollider(yardX, yardZ + 5, 19.2, 15.8, fenceBottom, fenceTop, 'coastal fishing-yard fence'));
+          coastalYardCount++;
+        }
+      }
+    }
+
     const structureGeometry = merge(parts);
     const structureMesh = new THREE.Mesh(structureGeometry, new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: .96 }));
     structureMesh.position.set(structureAnchor.x, 0, structureAnchor.z);
-    const tAxis = sampler.fromLocal(1, 0);
-    structureMesh.rotation.y = Math.atan2(tAxis.x - mission.ship.x, tAxis.z - mission.ship.z);
+    structureMesh.rotation.y = structureYaw;
     structureMesh.castShadow = true; structureMesh.receiveShadow = true; structureMesh.name = 'Stilt fishing hut and jetty';
     root.add(structureMesh);
-    structureColliders.push(colliderFor(structureMesh, 'coastal stilt hut and jetty'));
 
     const bulbs: THREE.BufferGeometry[] = [];
     for (const x of [-3.2, 3.2]) {
@@ -479,7 +589,7 @@ export function createCoastalDetails(
     const triangles = mesh.geometry.index ? mesh.geometry.index.count / 3 : mesh.geometry.getAttribute('position').count / 3;
     coastalTriangles += triangles * ((mesh as THREE.InstancedMesh).isInstancedMesh ? (mesh as THREE.InstancedMesh).count : 1);
   });
-  const stats = { coastalDrawCalls, coastalTriangles, boatCount: boatRecords.length, mangroveCount, grassCount: grassCounts[0] + grassCounts[1] };
+  const stats = { coastalDrawCalls, coastalTriangles, boatCount: boatRecords.length, mangroveCount, mangrovePocketCount, grassCount: grassCounts[0] + grassCounts[1], footpathSegments, coastalYardCount };
   root.userData = { ...root.userData, ...stats };
   scene.userData.coastalDetails = root.userData;
 

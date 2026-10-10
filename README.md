@@ -7,7 +7,7 @@ A browser-based, single-player Chinook firefighting game. Fly from a landing shi
 - **RSAF Deployment — Seruyan, October 2026.** A fictional campaign in which hazardous haze affecting Singapore prompts the SAF to deploy RSS Persistence and an RSAF Chinook crew to support firefighting in Central Kalimantan.
 - **JSDF Deployment — Ketapang, September 2026.** Based on Japan’s real deployment to Indonesia, with reconstructed missions featuring a JGSDF Chinook and JS Kunisaki.
 
-Compact maps and flight, fuel, and load handling are tuned for play. Mission routes and fire locations are authored game scenarios; [research notes](docs/research-notes.md) explain their sources and assumptions.
+Gameplay maps add rolling lowland hills, varied ground cover, dense regional vegetation, roads, farms, settlements, and detailed coastal transitions, with subtle distant ridges and a port skyline. These procedural scenes use authored local gameplay coordinates; they are illustrative rather than surveyed maps. See the [map geometry notes](docs/map-geometry-references.md) for sources and limits. Mission routes and fire locations are authored game scenarios; [research notes](docs/research-notes.md) explain their sources and assumptions.
 
 ## Playing
 

@@ -1,6 +1,6 @@
 # Map geometry reference review
 
-Reviewed 9 October 2026. Implemented in `src/render/world.ts` and `src/render/atmosphere.ts`.
+Reviewed 10 October 2026. Implemented across `src/render/world.ts`, `groundSurface.ts`, `vegetation.ts`, `landUse.ts`, `coastalDetails.ts`, `distantScenery.ts`, and the shared terrain collision code.
 
 ## Evidence used
 
@@ -10,45 +10,20 @@ Reviewed 9 October 2026. Implemented in `src/render/world.ts` and `src/render/at
 - [Indonesia DGCA: Rahadi Oesman airport](https://hubud.kemenhub.go.id/bandara/56) lists a 60 × 30 m concrete helipad and asphalt apron. The authored shore waypoint now has a matching-size concrete working pad, connecting pavement and small service building. The second pass also uses its 224 × 51 m apron, 30 m runway width, two taxiway connections and terminal/control-tower cues. The runway length is compressed to 1,000 m from the verified 1,400 m listing (1,650 m built). Airport placement/orientation, building shapes and apron arrangement remain authored, not surveyed.
 
 - [NASA: Heavy Smoke Blankets Borneo](https://science.nasa.gov/earth/earth-observatory/heavy-smoke-blankets-borneo-86847/) documents smoke from Borneo peat fires in October 2015. It informs the warm distant haze and softened horizon; neither campaign asserts this archived weather occurred on its authored 2026 mission dates.
+- [NParks: Rhizophora apiculata](https://www.nparks.gov.sg/florafaunaweb/flora/3/2/3265) and [Cocos nucifera](https://www.nparks.gov.sg/florafaunaweb/flora/5/6/5618) inform the mangrove roots and palm fronds. The models are simplified regional cues, not species-level reconstructions.
 
-## Implemented geometry
+## Current map implementation
 
-- A gently irregular coast with a sloped muddy intertidal transition to the sea; mottled lowland terrain, with subtle procedural ground grain.
-- A lobed, asymmetrical lake and narrow earthy shore rather than concentric circles. The complete simulation refill disc remains visible water; extra shoreline lobes are decorative.
-- A separate sinuous drainage corridor with muddy banks, plus a low coastal tree belt.
-- Clustered broadleaf swamp canopies at several heights with clearings, replacing pointed conifer-like crowns. Approximately 11,500 trees use four instanced draws after the focused tree pass; coastal prop roots use one additional draw. There are no per-tree shadows.
-- A compact linear settlement of raised homes with gabled roofs, connecting track, timber jetty and motorboats. All buildings/boats are authored, not replicas of identified properties.
-- A representative airport around the existing Japanese campaign shore waypoint: concrete helipad, asphalt apron and runway, threshold/edge/centerline markings, two taxiway links, low terminal with shaded glazing and name sign, compact tower and service/rescue facilities. None blocks the operational helipad.
-- Off-route low-amplitude 3D terrain undulations, flattened around all flight legs, fire/lake objectives and the airport. This gives depth without inventing a mountain range in coastal peat country.
-- Four additional instanced vegetation draws: low scrub, waterside reeds, slender palm trunks and radial drooping fronds. These are regional visual categories, not a botanically surveyed inventory.
-- World-space moving water normal ripples on sea and freshwater; water geometry stays at its original simulation heights.
-- A gradient sky dome with a sun disc and aureole, a single instanced draw of soft cloud groups, slow drift, and distinct blue-green Singapore-theatre humidity / warmer Japanese-theatre smoke haze. Clouds and weather are illustrative.
-- Fixed per-theatre random seeds keep land cover coherent across missions. Trees avoid every authored fire sector, the lake, river, settlement and shore handling area.
-- Visual clearances along all authored flight legs keep tall, non-colliding trees out of the guided camera path; shorter growth remains near its edges.
+- A shared 192 × 224 triangulated height grid drives the visible terrain and collision interpolation. Inland relief rises into broad rolling hills, up to roughly 60 m, while route shoulders, every fire zone, the refill lake, airport, and drainage corridor blend back to safe lowland heights.
+- Three small generated ground patterns blend between grass, dark peat and pale sand. Biome colour and texture shift near the coast, lake and drainage channel without external image downloads.
+- Seeded, instanced woodland places up to 20,000 collidable woody plants across six broad visual types: spreading broadleaf, emergent, secondary, swamp, coastal and palm. Understory, reeds, prop roots and fronds add smaller-scale structure. A reduced rendering tier preserves every tree and its collider while using simpler crowns.
+- Curving roads and tracks, a drainage bridge, field and orchard patches, a hamlet, village, farmsteads and palm grove create several forms of settlement. Generated solid structures and woody trunks register collision bounds; open roads and crop surfaces do not.
+- The intertidal slope now includes grouped mangroves, scrub, a shore yard, boat shed, fences and a path toward inland use. The authored lake remains fully usable at its simulation radius and keeps its irregular decorative edge.
+- The Japanese shore waypoint retains the representative Rahadi Oesman apron, runway and service buildings. Two distant inland ridge layers and a low Japanese port skyline supply subtle world-anchored depth; they have no gameplay collision.
+- Fixed campaign seeds keep land cover consistent between sorties. Route and objective clearances protect all twelve missions, and all generated solid obstacles feed the simulation's existing collision checks.
 
 ## Accuracy and gameplay limits
 
-These are reference-informed regional compositions, not GIS terrain or photogrammetry. No terrain DEM, satellite imagery, surveyed lake outline, real fire polygon, ship anchorage or real helicopter dip permission is asserted. Coastline/river/lake/settlement arrangement is authored; distances stay compressed so all missions retain their five-minute target. The Singapore lake is a small Sembuluh-inspired sector, not a scale model of the entire lake; the Ketapang freshwater lake is reconstructed gameplay scenery. Content evidence labels remain unchanged.
+These are reference-informed regional compositions, not GIS terrain or photogrammetry. No terrain DEM, surveyed road or settlement plan, lake outline, real fire polygon, ship anchorage or actual helicopter dip permission is asserted. The roads, farms, skyline and ridges are invented scenery; the latter suggest distance rather than a mapped mountain range. Coastline, drainage, lake and settlement arrangement remains authored, and gameplay distances stay compressed for roughly five-minute sorties. The Singapore lake is a small Sembuluh-inspired sector, not a scale model of the whole lake; the Ketapang freshwater lake is reconstructed gameplay scenery. Content evidence labels remain unchanged.
 
-Freshwater is at y=0.025 m and operational ground stays roughly 0.4–0.6 m below the simulation's y=0 surface. Cosmetic coastal slopes descend to the existing y=-9 m sea level. Trees and buildings remain non-colliding scenery. A follow-up gameplay correction reduced the Singapore/Japan refill radii to 195/180 m and moved fictional fire sectors onto land beyond the visible shoreline. All twelve sorties finish within five minutes with the required fuel reserve under a scripted test-only pilot; the game itself offers manual controls plus short local alignment at action zones.
-
-TypeScript and production build passed before integration. Root integration should rerun the mission suite and inspect both theatres in the browser. Mobile hardware profiling is still required.
-
-## Second-pass validation and integration
-
-`npm run build` passes (TypeScript and Vite). Call `world.update(timeSec, camera.position)` each render frame for ripple/cloud animation and sky recentering. Ground relief is cosmetic away from flight corridors; scenery remains non-colliding. Added vegetation and clouds use instancing rather than per-plant meshes. The focused tree pass uses about 1,150,000 crown triangles plus 391,000 wood triangles at the full 11,500-tree count, so physical mobile GPU profiling remains necessary. The airport structures add draw calls but no texture downloads. All texture grain/cloud/surface detail is original procedural content; referenced photographs are not redistributed. Root integration must inspect WebGL shader compilation and both theatre views in browser.
-
-
-## Focused tree refinement
-
-The third vegetation pass replaces the single ellipsoid crown with three shared templates: spreading lowland broadleaf, narrower vertically layered swamp canopy, and compact coastal crowns. Each template combines five uneven foliage masses, with small coherent silhouette perturbations and darker lower foliage. Visible three-way forks now support the crown. Heights, crown proportions, yaw and modest stand-level green variation break up repeated trees while retaining the established clearances and deterministic seed. These remain regional illustrative forms rather than individual species replicas.
-
-References consulted:
-
-- [NParks: Rhizophora apiculata](https://www.nparks.gov.sg/florafaunaweb/flora/3/2/3265): erect coastal mangrove form, dark bark, conical crown and conspicuous stilt roots. The compact coastal belt now has four sloping prop roots per tree where the bounded instance budget permits. Real mature mangroves can grow taller; the game retains shorter coastal vegetation for visibility.
-- [NParks: Cocos nucifera](https://www.nparks.gov.sg/florafaunaweb/flora/5/6/5618): slender trunk and long pinnate fronds with ascending, spreading and drooping forms. The palm geometry now uses a bowed row of separated paired leaflets instead of four-vertex solid paddles. Twelve leaflet pairs are a deliberate distant-view simplification, not the real leaflet count.
-- The existing CIFOR Ketapang habitat evidence continues to guide the broadleaf/peat-swamp setting. No conifers or temperate ornamental tree silhouettes are introduced.
-
-Budget: four instanced broadleaf draws replace two; bounded coastal roots add one more. Five 20-triangle crown lobes plus a 34-triangle open trunk/fork template give 134 triangles per broadleaf tree (about 1.541 million for 11,500), versus the former 100 triangles per tree (about 1.15 million). Coastal roots are capped at 19,200 triangles. Seven 24-triangle palm fronds per palm total at most 30,240 triangles. Existing shrubs/reeds remain instanced. No textures are downloaded, no alpha-blended leaf overdraw or per-tree meshes are added. `npm run build` passed; root integration should check both theatre flight views and physical mobile performance remains unverified.
-
-Production-view polish: trunk and foliage instance colours now explicitly convert the authored sRGB palette to linear space, matching the hex material colours. This corrects the washed-out cream/grey appearance under the existing bright hemisphere light. Bark is dark warm grey and foliage a subdued green. Independent lobe heights and per-tree crown aspect variation break up the flat umbrella repetition. Geometry counts and draw-call budget are unchanged.
+Freshwater stays at y=0.025 m and the operational landing surfaces retain their simulation heights. The coast descends to the existing y=-9 m sea level. Collision uses the terrain mesh's triangle heights and the actual generated tree/structure placements. Physical phone GPU profiling remains unverified; desktop and narrow-browser checks do not establish device performance.

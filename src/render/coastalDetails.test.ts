@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { campaigns } from '../content';
 import { createCoastalDetails } from './coastalDetails';
 import { createCoastalSampler } from './coastalSampling';
+import { createDistantScenery } from './distantScenery';
 
 type Point = { x: number; z: number };
 type MissionCase = { campaign: (typeof campaigns)[number]; mission: (typeof campaigns)[number]['missions'][number] };
@@ -58,6 +59,12 @@ describe('coastal detail generation', () => {
       expect(stats.boatCount).toBeLessThanOrEqual(8);
       expect(treeColliders.length).toBe(stats.mangroveCount);
       expect(treeColliders.length).toBeGreaterThan(0);
+      expect(stats.mangrovePocketCount).toBeGreaterThan(0);
+
+      const groupedTrees = treeColliders.filter(tree => treeColliders.some(other =>
+        other !== tree && Math.hypot(other.x - tree.x, other.z - tree.z) < 90,
+      ));
+      expect(groupedTrees.length / treeColliders.length).toBeGreaterThan(.7);
 
       const legs = flightLegs(campaign);
       // Mangrove collider circles retain a 180 m gap from every authored flight leg.
@@ -77,6 +84,13 @@ describe('coastal detail generation', () => {
 
       const hut = structureColliders.find(collider => collider.label === 'coastal stilt hut and jetty');
       if (hut) expect(clearance(hut, legs)).toBeGreaterThan(300);
+      const yardStructures = structureColliders.filter(collider => collider.label === 'coastal boat store shed' || collider.label === 'coastal fishing-yard fence');
+      expect(yardStructures.length).toBe(stats.coastalYardCount);
+      if (yardStructures.length) expect(stats.footpathSegments).toBeGreaterThan(2);
+      for (const structure of yardStructures) {
+        const conservativeRadius = Math.hypot(structure.halfWidth, structure.halfLength);
+        expect(clearance(structure, legs) - conservativeRadius).toBeGreaterThanOrEqual(300);
+      }
 
       const firstSnapshot = snapshot(first.details);
       const second = generate(campaign, mission);
@@ -88,5 +102,31 @@ describe('coastal detail generation', () => {
     } finally {
       first.details.dispose();
     }
+  });
+
+  it.each(missionCases)('$campaign.id / $mission.id adds fog-compatible world-anchored distant scenery and skips previews', ({ campaign, mission }) => {
+    const scene = new THREE.Scene();
+    const preview = createDistantScenery(scene, campaign, mission, { preview: true });
+    expect(scene.children).toHaveLength(0);
+    preview.dispose();
+
+    const scenery = createDistantScenery(scene, campaign, mission);
+    const root = scene.children.find(child => child.name === 'Distant scenery') as THREE.Group | undefined;
+    expect(root).toBeDefined();
+    expect(root?.position.x).toBe(mission.ship.x);
+    expect(root?.position.z).toBe(mission.ship.z);
+    const japanese = campaign.id === 'jp_ketapang_2026_09';
+    expect(root?.children.map(child => child.name)).toEqual(japanese
+      ? ['Low inland ridge', 'Hazed inland ridge', 'Ketapang port horizon']
+      : ['Low inland ridge', 'Hazed inland ridge']);
+    root?.traverse(object => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      expect(materials.every(material => (material as THREE.MeshStandardMaterial).fog)).toBe(true);
+      expect(mesh.castShadow).toBe(false);
+    });
+    scenery.dispose();
+    expect(scene.children).toHaveLength(0);
   });
 });

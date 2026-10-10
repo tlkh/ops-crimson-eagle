@@ -1,4 +1,4 @@
-const VERSION = 'crimson-eagle-v12';
+const VERSION = 'crimson-eagle-v13';
 const VOICE_CUES = [
   'go_lake', 'lake_descend', 'lake_climb', 'lake_slow', 'lake_align',
   'fetch_water', 'bucket_filling', 'bucket_full', 'load_limit', 'go_fire',

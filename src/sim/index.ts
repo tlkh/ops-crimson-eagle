@@ -5,6 +5,7 @@ import { nearbyTrees, renderedTerrainHeight, structureColliders, terrainHeight }
 import { BUCKET_BODY_HEIGHT_M, BUCKET_FLOAT_RIM_M, BUCKET_HOOK_OFFSET_M, BUCKET_LIFT_OFFSET_M,
   SLING_LENGTH_M, bucketReadyForDeckRecovery, bucketCrossesShipSide, bucketMinimumRimHeight, bucketSurfaceHeight, getBucketHook, isBucketTouchingLake } from './bucket';
 import { shipLandingLocalZ, shipLandingPoint } from './shipLanding';
+import { WORLD_REVISION } from '../worldRevision';
 
 export type { ExtendedSimState, WaterPacket } from './types';
 
@@ -160,6 +161,7 @@ function makeInitialState(campaign: Campaign, mission: Mission): ExtendedSimStat
   return {
     campaignId: campaign.id,
     missionId: mission.id,
+    worldRevision: WORLD_REVISION,
     tick: 0,
     timeSec: 0,
     phase: japanese ? 'depart' : 'deck_rig',
@@ -991,6 +993,16 @@ function checkCollision(state: ExtendedSimState, campaign: Campaign, mission: Mi
     }
   }
   return false;
+}
+
+/** Inspect a legacy checkpoint against the current solid world without changing the save. */
+export function checkpointIntersectsWorld(state: SimState, campaign: Campaign, mission: Mission): boolean {
+  const candidate = structuredClone(state) as ExtendedSimState;
+  if (checkCollision(candidate, campaign, mission)) return true;
+  // A suspended load may have been clear of the former ground but buried by
+  // new relief. Small contact tolerances are intentional for resting buckets.
+  return candidate.bucketAttached && candidate.bucket.y <
+    bucketMinimumRimHeight(campaign, mission, candidate.bucket.x, candidate.bucket.z) - .75;
 }
 
 function updateFillAndDump(state: ExtendedSimState, command: FlightCommand, mission: Mission, dt: number): void {

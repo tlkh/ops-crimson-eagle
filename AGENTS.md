@@ -34,9 +34,10 @@ Use semantic names: `[MODEL_NAME]-[TASK_TITLE]-[OPTIONAL_ID]`, using underscores
 | `src/sim/index.ts` | Headless gameplay: flight, phases, fuel, objective actions, bucket, water, fire, outcomes |
 | `src/sim/bucket.ts` | Shared bucket geometry, surface heights, and water-contact helpers |
 | `src/sim/fireWork.ts`, `src/sim/shipLanding.ts` | Shared fire-observation thresholds and campaign-specific ship landing points |
-| `src/sim/collision.ts` | Terrain interpolation and registered world obstacle collision data |
+| `src/sim/collision.ts` | Shared terrain heights, triangle interpolation, and registered world obstacle collision data |
 | `src/render/index.ts` | Three.js scene lifecycle, camera, and visual updates |
-| `src/render/aircraft.ts`, `ships.ts`, `world.ts` | Aircraft, ships, terrain, vegetation, settlements, and world collider registration |
+| `src/render/aircraft.ts`, `ships.ts`, `world.ts` | Aircraft, ships, terrain assembly, and world collider registration |
+| `src/render/groundSurface.ts`, `vegetation.ts`, `landUse.ts`, `coastalDetails.ts`, `distantScenery.ts` | Procedural ground patterns, biome vegetation, farms/roads/settlements, coastal transitions, and distant silhouettes |
 | `src/render/bucket.ts`, `groundCrew.ts` | Sling/load visuals and ground handling animation |
 | `src/render/water.ts`, `fire.ts`, `atmosphere.ts`, `timeOfDay.ts`, `nightLighting.ts`, `cinematicEffects.ts`, `proximityParticles.ts` | Water, fire, smoke, time-of-day lighting, and restrained cinematic/proximity effects |
 | `src/render/campaignFleet.ts` | Cached menu portraits rendered from the actual game aircraft and ships |
@@ -77,6 +78,8 @@ Keep gameplay authoritative in the simulation. Render code consumes state; it mu
 - Reset active inputs on pointer release/cancel/lost capture, pause, blur, visibility changes, and orientation changes. Global shortcuts must not override focused UI controls.
 - Unsafe contact with terrain, trees, ships, structures, or water causes an explosion and mission failure. Controlled landings on designated deck/shore areas are explicit exceptions. Fix geometry/contact math rather than disabling collision to hide clipping.
 - Rendered terrain and collision use the same triangulated height grid. Trees and structures register colliders from their actual generated placement; keep these aligned when changing models or world generation. Collision caches depend on the `Mission` object identity.
+- `TERRAIN_GRID` in `src/sim/collision.ts` defines the visible and collision terrain dimensions. Keep its row/column layout synchronized with `src/render/world.ts`, and preserve triangle interpolation and Float32 height agreement. Hills and land use stay clear of authored routes, refilling water, fire sectors, landing sites, and drainage water.
+- Procedural vegetation and rural land use use stable campaign seeds so scenery does not rearrange between sorties. Keep route/objective/settlement exclusions aligned with generated colliders. Reduced visual tiers must preserve visible trunks and their collision data; do not hide obstacles while retaining invisible colliders.
 
 ## Rendering and UI conventions
 
@@ -94,6 +97,7 @@ Keep gameplay authoritative in the simulation. Render code consumes state; it mu
 
 - IndexedDB database `operation-crimson-eagle`, store `checkpoints`, stores campaign-keyed snapshots with save version 1. Progress is separate in `localStorage` under `progress:<campaignId>`.
 - Preserve campaign/mission IDs or provide a migration. Selection resumes only the matching non-terminal mission; snapshot saves are serialized to prevent older writes overwriting newer state.
+- `worldRevision` marks checkpoints against authored terrain and solid-scene changes. When that revision changes, validate legacy aircraft and attached-bucket positions against the constructed world; restart only a checkpoint that intersects new scenery and keep campaign progress intact.
 - Browser storage is per origin. Different local hosts/ports can have different progress; use a clean browser context or deliberate restart when checking initial mission state.
 - Vite's base is **`/ops-crimson-eagle/`**. Use `import.meta.env.BASE_URL` for public asset URLs and service-worker registration. Keep manifest paths relative and verify the production build under this subpath.
 - The service worker registers only in production. Update its cache version and precache list when changing cached shell/art assets, and check for stale caches when a preview shows old visuals.
@@ -116,6 +120,7 @@ Dev and preview URLs include `/ops-crimson-eagle/`. `build` runs TypeScript chec
 
 - Inspect the working tree before editing and preserve unrelated user changes. Keep file ownership separate when delegating.
 - `src/content/content.test.ts` covers scenario validation/provenance. `src/sim/index.test.ts` covers simulation invariants. `src/integration.test.ts` flies every mission with a **test-only** command driver, checking completion within the five-minute target and landing fuel reserve. Do not expose that driver as gameplay autopilot.
+- `src/sim/terrain.test.ts` covers shared relief and mesh interpolation; `src/render/vegetation.test.ts` and `landUse.test.ts` cover vegetation tiers, route clearances, and deterministic rural scenery. Keep tests focused on gameplay safety and stable procedural placement.
 - Run the relevant existing checks for a change. For simulation/content changes, run `npm test`; for TypeScript/UI/assets, run `npm run build`. Add regression tests when they verify meaningful behavior rather than merely repeating the implementation.
 - For visual or interaction changes, inspect the actual local app at desktop and narrow phone widths. Exercise the affected action, keyboard/touch path, pause/resume, and mission/campaign switching as relevant. Screenshots and automated browser checks do not establish physical-device behavior.
 - Check staging with `git diff --cached --check` before committing. Report what changed, what was actually verified, and any remaining limitation without claiming unperformed tests or deployments.
