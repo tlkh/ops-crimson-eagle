@@ -3,14 +3,49 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
 import type { Campaign, Mission, SimState } from '../types';
 import { evaluateTimeOfDay } from './timeOfDay';
 import { lakeShapeProfile } from '../sim/lakeShape';
-import { campaignTerrainAnchor } from '../content/terrainFrame';
+import { campaignTerrainFrame } from '../content/terrainFrame';
 import { shipToLocal } from '../sim/shipLanding';
+import { ReflectionCaptureSchedule } from './reflectionCapture';
 
 export type WaterQuality = {
   reflectionSize: 256 | 512;
   reflectionIntervalMs: number;
   reflections: boolean;
 };
+
+// This is sampled only when the simulation view is otherwise unchanged. It
+// catches late texture swaps, material updates, scene additions and motion
+// while paused, without turning static reflections into a timed render pass.
+export function reflectedSceneSignature(scene: THREE.Scene): number {
+  let hash = 2166136261;
+  const add = (value: number) => { hash = Math.imul(hash ^ (value | 0), 16777619) >>> 0; };
+  const addString = (value: string) => { for (let i = 0; i < value.length; i++) add(value.charCodeAt(i)); };
+  const addTexture = (texture: THREE.Texture) => { add(texture.id); add(texture.version); };
+  if (scene.environment) addTexture(scene.environment);
+  add(Math.round(scene.environmentIntensity * 1000));
+  add(Math.round(scene.environmentRotation.y * 1000));
+  if (scene.background instanceof THREE.Texture) addTexture(scene.background);
+  scene.traverseVisible(object => {
+    add(object.id);
+    for (let i = 0; i < 16; i++) add(Math.round(object.matrixWorld.elements[i] * 1000));
+    const material = (object as THREE.Mesh).material;
+    if (!material) return;
+    for (const item of Array.isArray(material) ? material : [material]) {
+      addString(item.uuid); add(item.version);
+      add(Math.round(item.opacity * 1000));
+      const lit = item as THREE.MeshStandardMaterial;
+      if (lit.color) {
+        add(Math.round(lit.color.r * 1000)); add(Math.round(lit.color.g * 1000)); add(Math.round(lit.color.b * 1000));
+      }
+      if (Number.isFinite(lit.roughness)) add(Math.round(lit.roughness * 1000));
+      if (Number.isFinite(lit.metalness)) add(Math.round(lit.metalness * 1000));
+      for (const value of Object.values(item)) {
+        if (value instanceof THREE.Texture) addTexture(value);
+      }
+    }
+  });
+  return hash;
+}
 
 // One small planar reflection is refreshed at a time. Its capture cadence and
 // size follow the active quality profile; the mean surface remains the contact plane.
@@ -99,7 +134,7 @@ const fragmentShader = /* glsl */`
     float sea = 1.0-step(.5,kind);
     vec2 direction = normalize(wind+vec2(.001));
     vec2 crosswind = vec2(-direction.y,direction.x);
-    float strength = mix(.42,1.0,sea);
+    float strength = mix(.23,1.0,sea);
     float fine = 1.0-smoothstep(80.0,700.0,distanceToEye);
     // Slowly changing flow bends the otherwise parallel wave trains into broad
     // patches. The lake uses a tighter, quieter warp than open sea.
@@ -108,18 +143,18 @@ const fragmentShader = /* glsl */`
       noise(domainUv+vec2(2.7,6.1)),
       noise(domainUv+vec2(8.3,1.9))
     )-.5;
-    float warpScale = mix(3.5,11.0,sea);
+    float warpScale = mix(2.0,11.0,sea);
     vec2 wavePosition = p + domain*warpScale;
-    vec2 flowDirection = normalize(direction + domain*mix(.14,.30,sea));
+    vec2 flowDirection = normalize(direction + domain*mix(.075,.30,sea));
     vec2 flowCrosswind = vec2(-flowDirection.y,flowDirection.x);
     vec2 slope = wave(wavePosition,flowDirection,.075,.34,.075)*strength;
     slope += wave(wavePosition+domain*4.0,normalize(flowDirection+flowCrosswind*.46),.20,.64,.075)*strength;
     slope += wave(wavePosition-domain*3.0,normalize(flowDirection-flowCrosswind*.72),.54,1.08,.059)*strength;
-    slope += wave(wavePosition,flowCrosswind,1.55,1.55,.039)*fine;
-    slope += wave(wavePosition+domain,normalize(flowDirection+flowCrosswind*.32),3.9,2.2,.027)*fine;
-    slope += wave(wavePosition+domain*1.7,normalize(flowDirection-flowCrosswind*.21),8.0,3.0,.013)*fine;
+    slope += wave(wavePosition,flowCrosswind,1.55,1.55,.039)*fine*mix(.5,1.0,sea);
+    slope += wave(wavePosition+domain,normalize(flowDirection+flowCrosswind*.32),3.9,2.2,.027)*fine*mix(.5,1.0,sea);
+    slope += wave(wavePosition+domain*1.7,normalize(flowDirection-flowCrosswind*.21),8.0,3.0,.013)*fine*mix(.5,1.0,sea);
     float grain = noise(p*.37-direction*time*.24);
-    slope *= .72+grain*.52;
+    slope *= mix(.87+grain*.24,.72+grain*.52,sea);
 
     vec2 washSlopeA, washSlopeB;
     float aeration = wash(p,washA,washSlopeA)+wash(p,washB,washSlopeB);
@@ -161,11 +196,11 @@ const fragmentShader = /* glsl */`
     vec3 reflectedDirection = reflect(-view,normal);
     vec3 sky = mix(daylightHorizon,daylightZenith,pow(max(0.0,reflectedDirection.y),.5));
     vec2 projected = mirrorUv.xy/max(mirrorUv.w,.001);
-    vec2 distortion = slope * .014 * (1.0-smoothstep(500.0,3500.0,distanceToEye));
+    vec2 distortion = slope * mix(.0055,.014,sea) * (1.0-smoothstep(500.0,3500.0,distanceToEye));
     vec2 reflectionUv = clamp(projected+distortion,vec2(.002),vec2(.998));
     float validUv = step(.001,projected.x)*step(projected.x,.999)*step(.001,projected.y)*step(projected.y,.999);
     vec3 reflection = mix(sky,texture2D(tDiffuse,reflectionUv).rgb,reflectionReady*validUv);
-    vec3 base = color*(.83+grain*.26);
+    vec3 base = color*mix(.94+grain*.12,.83+grain*.26,sea);
     base = mix(base,vec3(.12,.23,.19),margin*.5);
     float shallow = sea * (1.0-smoothstep(0.0,100.0,max(0.0,beachDistance)));
     vec3 sediment = mix(vec3(.18,.19,.12), vec3(.28,.27,.18),noise(p*.085));
@@ -174,7 +209,7 @@ const fragmentShader = /* glsl */`
     vec3 sun = daylightSun;
     vec3 halfVector = normalize(sun+view);
     float glint = pow(max(0.0,dot(normal,halfVector)),180.0);
-    result += daylightSunColor*glint*.75*daylightStrength;
+    result += daylightSunColor*glint*mix(.43,.75,sea)*daylightStrength;
     result = mix(result,vec3(.60,.70,.68)*daylightAmbient,clamp(foam+aeration*.24,0.0,.66));
     float impactFoam = exp(-pow((bucketDistance-(3.0+fract(time*.28)*1.6))/.68,2.0))*bucketRipple.z;
     result += vec3(.08,.11,.105)*daylightAmbient*bucketRipple.z*exp(-pow((bucketDistance-2.0)/1.4,2.0));
@@ -195,10 +230,8 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
   };
   const jp = campaign.id === 'jp_ketapang_2026_09';
   const lakeShape = lakeShapeProfile(campaign.id);
-  const target = mission.shore ?? mission.lake;
-  const coastOrigin = campaignTerrainAnchor(campaign);
-  const route = new THREE.Vector2(target.x-coastOrigin.x,target.z-coastOrigin.z);
-  const routeLength = route.length(); route.normalize();
+  const { origin: coastOrigin, length: routeLength, ux, uz } = campaignTerrainFrame(campaign, mission);
+  const route = new THREE.Vector2(ux, uz);
   const shared = {
     daylightSun: { value: new THREE.Vector3() }, daylightSunColor: { value: new THREE.Color() },
     daylightZenith: { value: new THREE.Color() }, daylightHorizon: { value: new THREE.Color() },
@@ -216,9 +249,10 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
     washA: { value: new THREE.Vector3() }, washB: { value: new THREE.Vector3() },
     bucketRipple: { value: new THREE.Vector3() },
   };
-  const surfaces: Array<{ mesh: Reflector; kind: number; captured: boolean; lastCapture: number }> = [];
+  const surfaces: Array<{ mesh: Reflector; kind: number; capture: ReflectionCaptureSchedule }> = [];
   let reflecting = false;
   let activeKind = 0;
+  let captureClockMs = performance.now();
   const waterColor = (kind: number) => new THREE.Color(kind===0?'#356d73':jp?'#3f6157':'#396c65');
   const shader = (kind: number) => ({
     name: 'Crimson reflective water', vertexShader, fragmentShader,
@@ -239,18 +273,25 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
     // Reflector clones uniforms; reconnect only the animated environmental values.
     Object.assign(material.uniforms,shared);
     const reflectionPass = mesh.onBeforeRender;
-    const entry = {mesh,kind,captured:false,lastCapture:-Infinity};
+    const entry = {mesh,kind,capture:new ReflectionCaptureSchedule()};
     surfaces.push(entry);
     mesh.onBeforeRender = function(renderer,renderScene,camera,geometry,material,group) {
       if (!quality.reflections || reflecting || entry.kind!==activeKind) return;
-      const now = performance.now();
-      if (entry.captured && now-entry.lastCapture<quality.reflectionIntervalMs) return;
+      const view = camera.matrixWorld.elements;
+      const projection = camera.projectionMatrix.elements;
+      let sceneSignature: number | undefined;
+      const signature = () => sceneSignature ??= reflectedSceneSignature(renderScene);
+      if (!entry.capture.needsCapture(captureClockMs, shared.time.value, view, projection, quality.reflectionIntervalMs, signature)) return;
+      // A full scene signature is needed only for static views; moving
+      // simulation time already invalidates captures at the profile cadence.
+      // Record it before hiding sibling surfaces for the reflection pass.
+      const sourceSignature = entry.capture.isStationary ? signature() : undefined;
       reflecting = true;
       const hidden = surfaces.filter(other=>other!==entry && other.mesh.visible);
       hidden.forEach(other=>other.mesh.visible=false);
       try {
         reflectionPass.call(this,renderer,renderScene,camera,geometry,material,group);
-        entry.captured=true; entry.lastCapture=now;
+        entry.capture.didCapture(captureClockMs, shared.time.value, view, projection, sourceSignature);
         (mesh.material as THREE.ShaderMaterial).uniforms.reflectionReady.value=1;
       } finally {
         hidden.forEach(other=>other.mesh.visible=true);
@@ -265,6 +306,9 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
   Object.assign(riverMaterial.uniforms,shared);
   return {
     surface, riverMaterial,
+    invalidateReflections() {
+      for (const entry of surfaces) entry.capture.invalidate();
+    },
     setQuality(next: WaterQuality) {
       const wasEnabled = quality.reflections;
       const previousSize = quality.reflectionSize;
@@ -276,12 +320,14 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
       for (const entry of surfaces) {
         if (previousSize !== quality.reflectionSize) entry.mesh.getRenderTarget().setSize(quality.reflectionSize, quality.reflectionSize);
         if (previousSize !== quality.reflectionSize || wasEnabled !== quality.reflections) {
-          entry.captured = false;
+          entry.capture.invalidate();
           (entry.mesh.material as THREE.ShaderMaterial).uniforms.reflectionReady.value = 0;
         }
       }
     },
-    update(time: number, state?: SimState) {
+    update(time: number, state?: SimState, clockMs = performance.now()) {
+      captureClockMs = Number.isFinite(clockMs) ? clockMs : performance.now();
+      for (const entry of surfaces) entry.capture.observeSimulationTime(time);
       shared.time.value=time;
       const daylight = evaluateTimeOfDay(mission, time);
       shared.daylightSun.value.set(...daylight.sunDirection);
@@ -294,6 +340,13 @@ export function createWater(scene: THREE.Scene, campaign: Campaign, mission: Mis
       const p=state.position;
       const overLake=Math.hypot(p.x-mission.lake.x,p.z-mission.lake.z)<mission.lake.radius+100;
       activeKind=overLake?1:0;
+      // Only the active surface receives reflection captures. An inactive
+      // surface must use its sky fallback, not a frozen image projected from
+      // an earlier camera (particularly visible after cinematic camera cuts).
+      for (const entry of surfaces) if (entry.kind !== activeKind) {
+        entry.capture.invalidate();
+        (entry.mesh.material as THREE.ShaderMaterial).uniforms.reflectionReady.value = 0;
+      }
       const height=overLake?.025:-9;
       const overSea=(p.x-coastOrigin.x)*route.x+(p.z-coastOrigin.z)*route.y<routeLength*.42;
       const deckPoint=shipToLocal(mission,p);

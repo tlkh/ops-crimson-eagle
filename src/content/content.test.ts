@@ -26,12 +26,12 @@ describe('campaign content', () => {
     }
 
     const singapore = campaigns[0];
-    expect(Math.hypot(singapore.missions[0].lake.x, singapore.missions[0].lake.z)).toBeGreaterThanOrEqual(1400);
-    expect(Math.hypot(singapore.missions[0].lake.x, singapore.missions[0].lake.z)).toBeLessThanOrEqual(1600);
+    expect(Math.hypot(singapore.missions[0].lake.x, singapore.missions[0].lake.z)).toBeGreaterThanOrEqual(1600);
+    expect(Math.hypot(singapore.missions[0].lake.x, singapore.missions[0].lake.z)).toBeLessThanOrEqual(1800);
     const japan = campaigns[1].missions[0];
     expect(Math.hypot(japan.shore!.x, japan.shore!.z)).toBeGreaterThanOrEqual(350);
-    expect(Math.hypot(japan.lake.x - japan.shore!.x, japan.lake.z - japan.shore!.z)).toBeGreaterThanOrEqual(1000);
-    expect(Math.hypot(japan.lake.x - japan.shore!.x, japan.lake.z - japan.shore!.z)).toBeLessThanOrEqual(1100);
+    expect(Math.hypot(japan.lake.x - japan.shore!.x, japan.lake.z - japan.shore!.z)).toBeGreaterThanOrEqual(1200);
+    expect(Math.hypot(japan.lake.x - japan.shore!.x, japan.lake.z - japan.shore!.z)).toBeLessThanOrEqual(1300);
   });
 
   it('keeps every fire patch clear of the freshwater shore', () => {

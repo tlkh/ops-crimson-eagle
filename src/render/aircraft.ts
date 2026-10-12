@@ -428,7 +428,9 @@ function paintSet(japanese: boolean) {
   ac.strokeStyle='#b5b5b5'; ac.lineWidth=1;
   for(const y of joints) { ac.beginPath(); ac.moveTo(0,y/2); ac.lineTo(512,y/2); ac.stroke(); }
   const aoMap=new THREE.CanvasTexture(aoCanvas); aoMap.anisotropy=2;
-  const skin=mat('#ffffff',1,{map,roughnessMap,normalMap,normalScale:new THREE.Vector2(.22,.22),aoMap,aoMapIntensity:.48,metalness:.04}); skin.name=japanese?'JGSDF three-colour painted skin':'RSAF olive-grey painted skin';
+  // A broad, restrained environment highlight makes the fuselage curvature
+  // readable against hazy terrain without changing either livery's colours.
+  const skin=mat('#ffffff',.92,{map,roughnessMap,normalMap,normalScale:new THREE.Vector2(.22,.22),aoMap,aoMapIntensity:.58,metalness:.04,envMapIntensity:1.12}); skin.name=japanese?'JGSDF three-colour painted skin':'RSAF olive-grey painted skin';
   let aftSkin=skin;
   if(japanese) {
     const aftCanvas=document.createElement('canvas'); aftCanvas.width=512; aftCanvas.height=512;
@@ -439,7 +441,7 @@ function paintSet(japanese: boolean) {
       aftCtx.fillStyle=stain; aftCtx.fillRect(x-13,438,26,74);
     }
     const aftMap=new THREE.CanvasTexture(aftCanvas); aftMap.colorSpace=THREE.SRGBColorSpace; aftMap.anisotropy=2;
-    aftSkin=mat('#3e5549',1,{map:aftMap,roughnessMap,normalMap,normalScale:new THREE.Vector2(.22,.22),aoMap,aoMapIntensity:.48,metalness:.04});
+    aftSkin=mat('#3e5549',.92,{map:aftMap,roughnessMap,normalMap,normalScale:new THREE.Vector2(.22,.22),aoMap,aoMapIntensity:.58,metalness:.04,envMapIntensity:1.12});
   }
   if(japanese) aftSkin.name='JGSDF solid green aft paint';
   const trim=mat(japanese?'#3d5146':base,.85), seam=mat(japanese?'#263630':'#484f40',.86);

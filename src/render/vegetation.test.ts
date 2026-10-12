@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import type { Campaign, Mission } from '../types';
+import { createJapanAirbaseFrame, signedDistanceToJapanAirbaseVegetationFootprint } from '../content/airbaseLayout';
 import type { BurnField } from './burnField';
 import { classifyBurnSeverity, createVegetation, type VegetationContext } from './vegetation';
 
@@ -25,6 +26,10 @@ const mission: Mission = {
 
 const campaign = {
   id: 'sg_fictional_2026_10',
+  missions: [mission],
+} as Campaign;
+const japanCampaign = {
+  id: 'jp_ketapang_2026_09',
   missions: [mission],
 } as Campaign;
 
@@ -60,6 +65,59 @@ function triangleCount(mesh: THREE.InstancedMesh) {
   return (mesh.geometry.getIndex()?.count ?? mesh.geometry.getAttribute('position').count) / 3;
 }
 
+function meanCanopyLuminance(scene: THREE.Scene) {
+  let sum = 0;
+  let count = 0;
+  for (const mesh of instanceMeshes(scene, 'lowland tropical canopy')) {
+    const colors = mesh.instanceColor?.array;
+    if (!colors) continue;
+    for (let index = 0; index < mesh.count; index++) {
+      const offset = index * 3;
+      sum += colors[offset] * .2126 + colors[offset + 1] * .7152 + colors[offset + 2] * .0722;
+      count++;
+    }
+  }
+  return sum / Math.max(1, count);
+}
+
+function distanceToRoad(point: { x: number; z: number }, road: { points: readonly { t: number; s: number }[] }) {
+  let nearest = Infinity;
+  for (let index = 1; index < road.points.length; index++) {
+    const a = road.points[index - 1], b = road.points[index];
+    const dt = b.t - a.t, ds = b.s - a.s;
+    const lengthSquared = dt * dt + ds * ds;
+    const fraction = lengthSquared ? THREE.MathUtils.clamp(
+      ((point.x - a.t) * dt + (point.z - a.s) * ds) / lengthSquared, 0, 1,
+    ) : 0;
+    nearest = Math.min(nearest, Math.hypot(point.x - a.t - fraction * dt, point.z - a.s - fraction * ds));
+  }
+  return nearest;
+}
+
+function roadShoulderCounts(
+  trees: readonly { x: number; z: number }[],
+  road: { points: readonly { t: number; s: number }[] },
+) {
+  return road.points.slice(1).map((b, segmentIndex) => {
+    const a = road.points[segmentIndex];
+    const dt = b.t - a.t, ds = b.s - a.s;
+    const length = Math.hypot(dt, ds);
+    const counts = { positive: 0, negative: 0 };
+    for (const tree of trees) {
+      const fraction = THREE.MathUtils.clamp(((tree.x - a.t) * dt + (tree.z - a.s) * ds) / (length * length), 0, 1);
+      if (fraction < .16 || fraction > .84) continue;
+      const offsetT = tree.x - (a.t + dt * fraction);
+      const offsetS = tree.z - (a.s + ds * fraction);
+      const signedOffset = (dt * offsetS - ds * offsetT) / length;
+      const magnitude = Math.abs(signedOffset);
+      if (magnitude < 13 || magnitude > 24) continue;
+      if (signedOffset > 0) counts.positive++;
+      else counts.negative++;
+    }
+    return counts;
+  });
+}
+
 describe('procedural tropical vegetation', () => {
   it('disposes every instance batch after removing it from the scene', () => {
     const scene = new THREE.Scene();
@@ -92,16 +150,38 @@ describe('procedural tropical vegetation', () => {
     const full = createVegetation(fullScene, campaign, mission, context('full'));
     const reducedMission = { ...mission, seed: mission.seed + 1 };
     const reduced = createVegetation(reducedScene, campaign, reducedMission, context('reduced'));
+    const japanScene = new THREE.Scene();
+    const japanMission = { ...mission, shore: { x: 2_000, z: -1_000, label: 'test shore pad' } };
+    const japan = createVegetation(japanScene, japanCampaign, japanMission, context('full'));
 
     try {
       const fullTrunks = instanceMeshes(fullScene, 'lowland tree boles');
       const reducedTrunks = instanceMeshes(reducedScene, 'lowland tree boles');
-      expect(full.treeColliders).toHaveLength(20_000);
+      expect(full.treeColliders).toHaveLength(26_000);
       expect(reduced.treeColliders).toEqual(full.treeColliders);
+      expect(japan.treeColliders).not.toEqual(full.treeColliders);
+      expect(japan.stats.palms).toBeGreaterThan(full.stats.palms * 2);
+      expect(japan.stats.secondary).toBeGreaterThan(full.stats.secondary);
+      expect(meanCanopyLuminance(japanScene)).toBeGreaterThan(meanCanopyLuminance(fullScene));
+      const airbaseFrame = createJapanAirbaseFrame(japanCampaign, japanMission);
+      expect(japan.treeColliders.every(tree =>
+        signedDistanceToJapanAirbaseVegetationFootprint(airbaseFrame, tree) > 0,
+      )).toBe(true);
+      const japanUnderstory = japanScene.getObjectByName('forest understory') as THREE.InstancedMesh;
+      const matrix = new THREE.Matrix4();
+      const position = new THREE.Vector3();
+      const quaternion = new THREE.Quaternion();
+      const scale = new THREE.Vector3();
+      const understoryClearsAirbase = Array.from({ length: japanUnderstory.count }, (_, index) => {
+        japanUnderstory.getMatrixAt(index, matrix);
+        matrix.decompose(position, quaternion, scale);
+        return signedDistanceToJapanAirbaseVegetationFootprint(airbaseFrame, position) > 0;
+      });
+      expect(understoryClearsAirbase.every(Boolean)).toBe(true);
       expect(full.stats.woodyPlants).toBe(full.stats.visiblePlants);
       expect(reduced.stats.visiblePlants).toBe(reduced.treeColliders.length);
-      expect(fullTrunks.reduce((sum, mesh) => sum + mesh.count, 0)).toBe(20_000);
-      expect(reducedTrunks.reduce((sum, mesh) => sum + mesh.count, 0)).toBe(20_000);
+      expect(fullTrunks.reduce((sum, mesh) => sum + mesh.count, 0)).toBe(26_000);
+      expect(reducedTrunks.reduce((sum, mesh) => sum + mesh.count, 0)).toBe(26_000);
       expect(fullTrunks.length).toBeLessThanOrEqual(12);
 
       const clearance = Math.min(...full.treeColliders.map(tree => {
@@ -113,10 +193,12 @@ describe('procedural tropical vegetation', () => {
       const fullUnderstory = fullScene.getObjectByName('forest understory') as THREE.InstancedMesh;
       const reducedUnderstory = reducedScene.getObjectByName('forest understory') as THREE.InstancedMesh;
       expect(reduced.stats.understory).toBe(full.stats.understory);
+      expect(full.stats.understory).toBe(7_000);
       expect(reducedUnderstory.instanceMatrix.array).toEqual(fullUnderstory.instanceMatrix.array);
     } finally {
       full.dispose();
       reduced.dispose();
+      japan.dispose();
     }
   });
 
@@ -125,26 +207,37 @@ describe('procedural tropical vegetation', () => {
       id: 'test-main-road',
       kind: 'paved' as const,
       points: [
-        { t: 700, s: -520 },
-        { t: 1_450, s: -520 },
-        { t: 2_300, s: -520 },
-        { t: 3_100, s: -520 },
+        { t: 700, s: -600 },
+        { t: 1_450, s: -600 },
+        { t: 2_100, s: -300 },
+        { t: 2_800, s: -600 },
+        { t: 3_400, s: -600 },
       ],
+    };
+    const crossingRoad = {
+      id: 'test-crossing-road',
+      kind: 'gravel' as const,
+      points: [{ t: 1_800, s: -1_250 }, { t: 1_800, s: 450 }],
     };
     const fullScene = new THREE.Scene();
     const reducedScene = new THREE.Scene();
-    const full = createVegetation(fullScene, campaign, mission, context('full', undefined, [road]));
-    const reduced = createVegetation(reducedScene, campaign, mission, context('reduced', undefined, [road]));
+    const roads = [road, crossingRoad];
+    const full = createVegetation(fullScene, campaign, mission, context('full', undefined, roads));
+    const reduced = createVegetation(reducedScene, campaign, mission, context('reduced', undefined, roads));
 
     try {
-      const roadsideTrees = full.treeColliders.filter(tree => {
-        const sideOffset = tree.z + 520;
-        return tree.x > 700 && tree.x < 3_100 && Math.abs(sideOffset) >= 15 && Math.abs(sideOffset) <= 22;
-      });
-      expect(roadsideTrees.filter(tree => tree.z > -520).length).toBeGreaterThan(20);
-      expect(roadsideTrees.filter(tree => tree.z < -520).length).toBeGreaterThan(20);
+      for (const shoulders of [...roadShoulderCounts(full.treeColliders, road), ...roadShoulderCounts(full.treeColliders, crossingRoad)]) {
+        expect(shoulders.positive).toBeGreaterThan(5);
+        expect(shoulders.negative).toBeGreaterThan(5);
+      }
+      const crossingTrees = full.treeColliders.filter(tree =>
+        Math.hypot(tree.x - 1_800, tree.z + 438) < 100,
+      );
+      expect(crossingTrees.every(tree =>
+        distanceToRoad(tree, road) >= 15.4 && distanceToRoad(tree, crossingRoad) >= 15.4,
+      )).toBe(true);
       expect(reduced.treeColliders).toEqual(full.treeColliders);
-      expect(full.treeColliders).toHaveLength(20_000);
+      expect(full.treeColliders).toHaveLength(26_000);
       expect(instanceMeshes(fullScene, 'lowland tree boles').reduce((sum, mesh) => sum + mesh.count, 0))
         .toBe(full.treeColliders.length);
       expect(instanceMeshes(reducedScene, 'lowland tree boles').reduce((sum, mesh) => sum + mesh.count, 0))
@@ -189,7 +282,7 @@ describe('procedural tropical vegetation', () => {
       expect(vegetation.stats.lodCells.far).toBe(canopies.length);
       expect(Math.max(...canopies.map(triangleCount))).toBeLessThan(mobileNearTriangles);
       expect(trunks.every(mesh => mesh.visible)).toBe(true);
-      expect(trunks.reduce((sum, mesh) => sum + mesh.count, 0)).toBe(20_000);
+      expect(trunks.reduce((sum, mesh) => sum + mesh.count, 0)).toBe(26_000);
     } finally {
       vegetation.dispose();
     }

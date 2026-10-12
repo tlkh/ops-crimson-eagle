@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import type { Campaign, Mission } from '../types';
+import type { JapanAirbaseFrame } from '../content/airbaseLayout';
 import { getCampaignGeography, sampleRoad, type CampaignRoad, type LocalPoint } from '../content/geography';
+import { getCampaignSites } from '../content/geographySites';
 import { campaignTerrainFrame } from '../content/terrainFrame';
 import type { StructureCollider } from '../sim/collision';
-import { isWithinLakeOutline } from '../sim/lakeShape';
 import type { BurnField } from './burnField';
 import type { VegetationExclusionZone } from './landUse';
 
@@ -31,8 +32,8 @@ export type JapanAirbaseResult = {
 };
 
 export type JapanAirbaseContext = {
-  /** Convert airbase-local x/z into the campaign's world x/z. */
-  toWorld(point: ApronPoint): Point;
+  /** Shared shore-centred frame used by the apron, roads, and support assets. */
+  frame: JapanAirbaseFrame;
   terrainHeight(x: number, z: number): number;
   renderedTerrainHeight(x: number, z: number): number | null;
 };
@@ -41,25 +42,6 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.z - b.z);
 const color = (value: THREE.ColorRepresentation, roughness = .9, metalness = 0) =>
   new THREE.MeshStandardMaterial({ color: value, roughness, metalness });
-
-function closestPoint(point: LocalPoint, a: LocalPoint, b: LocalPoint): LocalPoint {
-  const dt = b.t - a.t, ds = b.s - a.s;
-  const lengthSquared = dt * dt + ds * ds;
-  const fraction = lengthSquared === 0 ? 0 : clamp(((point.t - a.t) * dt + (point.s - a.s) * ds) / lengthSquared, 0, 1);
-  return { t: a.t + dt * fraction, s: a.s + ds * fraction };
-}
-
-function pointOnRoad(start: LocalPoint, roads: readonly CampaignRoad[]): Array<{ road: CampaignRoad; point: LocalPoint; distance: number }> {
-  const candidates: Array<{ road: CampaignRoad; point: LocalPoint; distance: number }> = [];
-  for (const road of roads) {
-    const points = sampleRoad(road.points, 8);
-    for (let index = 1; index < points.length; index++) {
-      const point = closestPoint(start, points[index - 1], points[index]);
-      candidates.push({ road, point, distance: Math.hypot(point.t - start.t, point.s - start.s) });
-    }
-  }
-  return candidates.sort((a, b) => a.distance - b.distance);
-}
 
 function makeRoadGeometry(
   points: readonly LocalPoint[],
@@ -95,23 +77,6 @@ function makeRoadGeometry(
   return geometry;
 }
 
-function isRoadClear(
-  campaign: Campaign,
-  mission: Mission,
-  toWorld: (point: ApronPoint) => Point,
-  points: readonly LocalPoint[],
-  routeLength: number,
-): boolean {
-  for (const roadPoint of sampleRoad(points, 8)) {
-    const apronPoint = { x: -roadPoint.s, z: roadPoint.t - routeLength };
-    const world = toWorld(apronPoint);
-    if (isWithinLakeOutline(campaign.id, mission.lake, world, 24)) return false;
-    const river = -850 + 120 * Math.sin(roadPoint.t * .0021) + 75 * Math.sin(roadPoint.t * .0053);
-    if (Math.abs(roadPoint.s - river) < 68 + 14) return false;
-  }
-  return true;
-}
-
 /** Authored perimeter, access roads, and support facilities for the Japan theatre. */
 export function createJapanAirbase(
   scene: THREE.Scene,
@@ -122,44 +87,46 @@ export function createJapanAirbase(
   if (campaign.id !== 'jp_ketapang_2026_09' || !mission.shore) return null;
 
   const geography = getCampaignGeography(campaign);
-  const target = mission.shore;
-  const { length: routeLength, ux, uz } = campaignTerrainFrame(campaign, mission);
-  const localToRoad = (point: ApronPoint): LocalPoint => ({ t: routeLength + point.z, s: -point.x });
-  const roadToLocal = (point: LocalPoint): ApronPoint => ({ x: -point.s, z: point.t - routeLength });
+  const siteGates = getCampaignSites(campaign).airbaseGates;
+  const northServiceGate = siteGates.find(gate => gate.id === 'japan-airbase-north-service-gate');
+  if (!northServiceGate) throw new Error('Japan airbase needs its northern service gate anchor');
+  const terrainFrame = campaignTerrainFrame(campaign, mission);
+  const worldToRoad = (point: Point): LocalPoint => {
+    const dx = point.x - terrainFrame.origin.x, dz = point.z - terrainFrame.origin.z;
+    return { t: dx * terrainFrame.ux + dz * terrainFrame.uz, s: dx * terrainFrame.sx + dz * terrainFrame.sz };
+  };
+  const roadToWorld = (point: LocalPoint): Point => ({
+    x: terrainFrame.origin.x + point.t * terrainFrame.ux + point.s * terrainFrame.sx,
+    z: terrainFrame.origin.z + point.t * terrainFrame.uz + point.s * terrainFrame.sz,
+  });
+  const localToRoad = (point: ApronPoint): LocalPoint => worldToRoad(context.frame.toWorld(point));
+  const roadToLocal = (point: LocalPoint): ApronPoint => context.frame.toLocal(roadToWorld(point));
   const roads: CampaignRoad[] = [];
-  const spine = geography.roads.find(road => road.id === 'sector-access-spine');
-  if (!spine) throw new Error('Japan airbase needs the connected sector access road');
-
-  const gateSpecs = [
-    { id: 'west-main-gate', z: 378, width: 24 },
-    { id: 'west-service-gate', z: 652, width: 22 },
-  ] as const;
-  for (const gate of gateSpecs) {
-    const roadStart = localToRoad({ x: -190, z: gate.z });
-    const join = pointOnRoad(roadStart, [spine]).find(candidate =>
-      isRoadClear(campaign, mission, context.toWorld, [roadStart, candidate.point], routeLength));
-    if (!join) throw new Error(`Could not connect Japan airbase ${gate.id} to the campaign road network`);
-    roads.push({
-      id: `japan-airbase-${gate.id}`,
-      kind: 'gravel',
-      points: [roadStart, join.point],
-    });
-  }
+  const seawardGateSpecs = siteGates.filter(gate => gate.id.includes('seaward')).map(gate => {
+    const local = roadToLocal(gate.position);
+    return {
+      id: gate.id.replace('japan-airbase-', ''),
+      x: local.x,
+      z: local.z,
+      width: gate.id.includes('main') ? 24 : 22,
+    };
+  });
+  const seawardGateX = seawardGateSpecs[0]?.x ?? -110;
 
   const internalRoads: CampaignRoad[] = [
     {
       id: 'japan-airbase-internal-access', kind: 'paved',
       points: [
-        localToRoad({ x: -190, z: 378 }), localToRoad({ x: -145, z: 378 }),
-        localToRoad({ x: -112, z: 350 }), localToRoad({ x: -112, z: -145 }),
+        localToRoad({ x: seawardGateX, z: 378 }), localToRoad({ x: seawardGateX + 45, z: 378 }),
+        localToRoad({ x: -32, z: 350 }), localToRoad({ x: -32, z: -145 }),
         localToRoad({ x: 35, z: -145 }), localToRoad({ x: 35, z: 755 }),
       ],
     },
     {
       id: 'japan-airbase-service-access', kind: 'gravel',
       points: [
-        localToRoad({ x: -190, z: 652 }), localToRoad({ x: -145, z: 652 }),
-        localToRoad({ x: -112, z: 625 }), localToRoad({ x: 35, z: 625 }),
+        localToRoad({ x: seawardGateX, z: 652 }), localToRoad({ x: seawardGateX + 45, z: 652 }),
+        localToRoad({ x: -32, z: 625 }), localToRoad({ x: 35, z: 625 }),
       ],
     },
     ...[
@@ -173,11 +140,17 @@ export function createJapanAirbase(
     ].map(road => ({ id: `japan-airbase-${road.id}`, kind: 'gravel' as const, points: road.points.map(localToRoad) })),
   ];
   roads.push(...internalRoads);
+  // The external service road is owned by campaign geography and ends at the
+  // shared gate anchor. This short internal drive continues to the checkpoint.
+  roads.push({
+    id: 'japan-airbase-north-checkpoint-drive', kind: 'gravel',
+    points: [northServiceGate.position, localToRoad({ x: 367, z: 898 })],
+  });
 
   const root = new THREE.Group();
   root.name = 'Rahadi Oesman airbase perimeter and facilities';
-  root.position.set(target.x, 0, target.z);
-  root.rotation.y = Math.atan2(ux, uz);
+  root.position.set(context.frame.origin.x, 0, context.frame.origin.z);
+  root.rotation.y = context.frame.heading;
   scene.add(root);
 
   const postMaterial = color('#414b43', .72, .22);
@@ -217,15 +190,15 @@ export function createJapanAirbase(
     return mesh;
   };
   const addLocalCollider = (x: number, z: number, halfWidth: number, halfLength: number, bottom: number, top: number, label: string) => {
-    const center = context.toWorld({ x, z });
-    const xAxis = context.toWorld({ x: x + halfWidth, z });
-    const zAxis = context.toWorld({ x, z: z + halfLength });
+    const center = context.frame.toWorld({ x, z });
+    const xAxis = context.frame.toWorld({ x: x + halfWidth, z });
+    const zAxis = context.frame.toWorld({ x, z: z + halfLength });
     const worldHalfWidth = Math.abs(xAxis.x - center.x) + Math.abs(zAxis.x - center.x);
     const worldHalfLength = Math.abs(xAxis.z - center.z) + Math.abs(zAxis.z - center.z);
     structureColliders.push({ x: center.x, z: center.z, halfWidth: worldHalfWidth, halfLength: worldHalfLength, bottom, top, label });
   };
   const addFootprint = (x: number, z: number, radius: number, burnProtected: boolean) => {
-    const world = context.toWorld({ x, z });
+    const world = context.frame.toWorld({ x, z });
     const zone = { x: world.x, z: world.z, radius };
     structureExclusionZones.push(zone);
     if (burnProtected) burnProtectedZones.push(zone);
@@ -239,21 +212,21 @@ export function createJapanAirbase(
   const wireSegments: number[] = [];
   const fenceColliders: StructureCollider[] = [];
   const fencePath: ApronPoint[][] = [
-    [{ x: -190, z: -170 }, { x: 390, z: -170 }],
+    [{ x: seawardGateX, z: -170 }, { x: 390, z: -170 }],
     [{ x: 390, z: -170 }, { x: 390, z: 930 }],
     // The sector track crosses through an open northern service entrance.
-    [{ x: 390, z: 930 }, { x: 352, z: 926.65 }],
-    [{ x: 315, z: 923.38 }, { x: 220, z: 915 }, { x: 80, z: 870 }, { x: -80, z: 810 }, { x: -190, z: 780 }],
-    [{ x: -190, z: 780 }, { x: -190, z: 664 }],
-    [{ x: -190, z: 642 }, { x: -190, z: 390 }],
-    [{ x: -190, z: 366 }, { x: -190, z: -170 }],
+    [{ x: 390, z: 930 }, { x: 389, z: 930 - 15 / 170 }],
+    [{ x: 355, z: 930 - 35 * 15 / 170 }, { x: 220, z: 915 }, { x: 80, z: 870 }, { x: -80, z: 810 }, { x: seawardGateX, z: 780 }],
+    [{ x: seawardGateX, z: 780 }, { x: seawardGateX, z: 664 }],
+    [{ x: seawardGateX, z: 642 }, { x: seawardGateX, z: 390 }],
+    [{ x: seawardGateX, z: 366 }, { x: seawardGateX, z: -170 }],
   ];
   const dummy = new THREE.Object3D();
   let postCount = 0;
   const addFenceRun = (path: readonly ApronPoint[]) => {
     for (let index = 1; index < path.length; index++) {
       const a = path[index - 1], b = path[index];
-      const aWorld = context.toWorld(a), bWorld = context.toWorld(b);
+      const aWorld = context.frame.toWorld(a), bWorld = context.frame.toWorld(b);
       const length = distance(aWorld, bWorld);
       if (length < .1) continue;
       fenceMetres += length;
@@ -262,7 +235,7 @@ export function createJapanAirbase(
         const u0 = segment / segments, u1 = Math.min(1, (segment + 1) / segments);
         const p0 = { x: a.x + (b.x - a.x) * u0, z: a.z + (b.z - a.z) * u0 };
         const p1 = { x: a.x + (b.x - a.x) * u1, z: a.z + (b.z - a.z) * u1 };
-        const w0 = context.toWorld(p0), w1 = context.toWorld(p1);
+        const w0 = context.frame.toWorld(p0), w1 = context.frame.toWorld(p1);
         const y0 = groundAt(w0), y1 = groundAt(w1);
         const span = distance(w0, w1);
         if (segment === 0) {
@@ -292,7 +265,7 @@ export function createJapanAirbase(
         fenceSections++;
         for (let d = 0; d <= span; d += 12) {
           const u = span > 0 ? Math.min(1, d / span) : 0;
-          const world = context.toWorld({ x: THREE.MathUtils.lerp(p0.x, p1.x, u), z: THREE.MathUtils.lerp(p0.z, p1.z, u) });
+          const world = context.frame.toWorld({ x: THREE.MathUtils.lerp(p0.x, p1.x, u), z: THREE.MathUtils.lerp(p0.z, p1.z, u) });
           vegetationExclusionZones.push({ x: world.x, z: world.z, radius: 12 });
           structureExclusionZones.push({ x: world.x, z: world.z, radius: 12 });
         }
@@ -310,43 +283,41 @@ export function createJapanAirbase(
   root.add(wires);
   structureColliders.push(...fenceColliders);
 
-  const gateMarkers = [
-    { id: 'main gate', x: -190, z: 378 },
-    { id: 'service gate', x: -190, z: 652 },
-  ];
-  for (const gate of gateMarkers) {
-      const boothX = -165;
+  for (const gate of seawardGateSpecs) {
+      const gateName = gate.id.replace('seaward-', '').replace('-', ' ');
+      const boothX = gate.x + 25;
       const boothZ = gate.z + 18;
-      const point = context.toWorld({ x: boothX, z: boothZ });
+      const point = context.frame.toWorld({ x: boothX, z: boothZ });
       const y = groundAt(point);
       const booth = new THREE.Group();
-      booth.name = `Airbase ${gate.id} checkpoint booth`;
+      booth.name = `Airbase ${gateName} checkpoint booth`;
       addBox(booth, [8, 3.2, 6], [0, y + 1.6, 0], wall, 'Checkpoint booth');
       addBox(booth, [8.8, .55, 6.8], [0, y + 3.45, 0], roof, 'Checkpoint canopy');
       addBox(booth, [5.5, 1.5, .16], [0, y + 1.85, 3.08], glass, 'Checkpoint window');
       booth.position.set(boothX, 0, boothZ);
       root.add(booth);
-      const colliderCenter = context.toWorld({ x: boothX, z: boothZ });
-      const hx = context.toWorld({ x: boothX + 4.4, z: boothZ });
-      const hz = context.toWorld({ x: boothX, z: boothZ + 3.4 });
+      const colliderCenter = context.frame.toWorld({ x: boothX, z: boothZ });
+      const hx = context.frame.toWorld({ x: boothX + 4.4, z: boothZ });
+      const hz = context.frame.toWorld({ x: boothX, z: boothZ + 3.4 });
       structureColliders.push({
         x: colliderCenter.x, z: colliderCenter.z,
         halfWidth: Math.abs(hx.x - colliderCenter.x) + Math.abs(hz.x - colliderCenter.x),
         halfLength: Math.abs(hx.z - colliderCenter.z) + Math.abs(hz.z - colliderCenter.z),
-        bottom: y, top: y + 4, label: `Airbase ${gate.id} checkpoint`,
+        bottom: y, top: y + 4, label: `Airbase ${gateName} checkpoint`,
       });
       addFootprint(boothX, boothZ, 12, true);
       roads.push({
-        id: `japan-airbase-${gate.id.replaceAll(' ', '-')}-checkpoint-drive`,
+        id: `japan-airbase-${gate.id}-checkpoint-drive`,
         kind: 'gravel',
-        points: [localToRoad({ x: -145, z: gate.z }), localToRoad({ x: -155, z: gate.z + 9 }), localToRoad({ x: boothX + 5, z: boothZ })],
+        points: [localToRoad({ x: gate.x + 45, z: gate.z }), localToRoad({ x: gate.x + 35, z: gate.z + 9 }), localToRoad({ x: boothX + 5, z: boothZ })],
       });
     // The striped boom is raised so the road remains passable in the authored scene.
-    const barrierPoint = context.toWorld({ x: -177, z: gate.z + 12 });
+    const barrierX = gate.x + 13;
+    const barrierPoint = context.frame.toWorld({ x: barrierX, z: gate.z + 12 });
     const barrierY = groundAt(barrierPoint);
     const barrier = new THREE.Group();
     barrier.name = `Airbase ${gate.id} barrier`;
-    barrier.position.set(-177, barrierY, gate.z + 12);
+    barrier.position.set(barrierX, barrierY, gate.z + 12);
     const post = new THREE.Mesh(new THREE.CylinderGeometry(.28, .34, 1.6, 8), darkMetal);
     post.position.set(0, .8, 0); barrier.add(post);
     const pivot = new THREE.Group();
@@ -373,7 +344,7 @@ export function createJapanAirbase(
     bodyMaterial = wall,
     roofMaterial = roof,
   ) => {
-    const point = context.toWorld({ x, z });
+    const point = context.frame.toWorld({ x, z });
     const ground = groundAt(point);
     const building = new THREE.Group();
     building.name = `Airbase ${name}`;
@@ -381,9 +352,9 @@ export function createJapanAirbase(
     addBox(building, [width + 4, .8, depth + 4], [0, ground + wallHeight + .4, 0], roofMaterial, `${name} roof`);
     building.position.set(x, 0, z);
     root.add(building);
-    const center = context.toWorld({ x, z });
-    const halfX = context.toWorld({ x: x + width * .5 + 2, z });
-    const halfZ = context.toWorld({ x, z: z + depth * .5 + 2 });
+    const center = context.frame.toWorld({ x, z });
+    const halfX = context.frame.toWorld({ x: x + width * .5 + 2, z });
+    const halfZ = context.frame.toWorld({ x, z: z + depth * .5 + 2 });
     structureColliders.push({
       x: center.x, z: center.z,
       halfWidth: Math.abs(halfX.x - center.x) + Math.abs(halfZ.x - center.x),
@@ -405,16 +376,13 @@ export function createJapanAirbase(
   addBuilding('airport fire and rescue station', -48, 480, 34, 26, 6, color('#9a9b88'), color('#863d32', .8));
   addBuilding('airfield service stores', 154, 430, 44, 32, 7, color('#9fa394'), color('#59635b', .83));
   addBuilding('ground support workshop', 154, 555, 46, 36, 8, color('#92998f'), color('#45534e', .78, .08));
-  const northCheckpoint = addBuilding('north service checkpoint', 322, 898, 8, 6, 3.2);
+  const northCheckpoint = addBuilding('north service checkpoint', 373, 898, 8, 6, 3.2);
   addBox(northCheckpoint.building, [5, 1.3, .16], [0, northCheckpoint.ground + 2, 3.08], glass, 'Northern checkpoint window');
-  const northJoin = pointOnRoad(localToRoad({ x: 334, z: 925 }), [spine])[0].point;
-  roads.push({ id: 'japan-airbase-north-checkpoint-drive', kind: 'gravel', points: [northJoin, localToRoad({ x: 316, z: 898 })] });
-
   // A bounded fuel point sits beside the service road, away from the runway threshold and approach line.
   const tankMaterial = color('#68736b', .65, .28);
   materials.push(tankMaterial);
   for (const [index, x, z] of [[0, 145, 755], [1, 180, 755], [2, 145, 790]] as const) {
-    const point = context.toWorld({ x, z });
+    const point = context.frame.toWorld({ x, z });
     const ground = groundAt(point);
     const tank = new THREE.Mesh(new THREE.CylinderGeometry(7.5, 8, 10, 16), tankMaterial);
     tank.name = `Airbase fuel tank ${index + 1}`;
@@ -426,7 +394,7 @@ export function createJapanAirbase(
   }
 
   const addVehicle = (name: string, x: number, z: number, bodyColor: THREE.Material) => {
-    const point = context.toWorld({ x, z });
+    const point = context.frame.toWorld({ x, z });
     const ground = groundAt(point);
     const vehicle = new THREE.Group();
     vehicle.name = `Airbase ${name}`;
@@ -461,7 +429,7 @@ export function createJapanAirbase(
   for (const site of supplySites) {
     for (const [offsetX, offsetZ] of [[0, 0], [2.3, 0], [0, 2.1]]) {
       const x = site.x + offsetX, z = site.z + offsetZ;
-      const ground = groundAt(context.toWorld({ x, z }));
+      const ground = groundAt(context.frame.toWorld({ x, z }));
       supplies.setMatrixAt(supplyIndex++, new THREE.Matrix4().makeTranslation(x, ground + .6, z));
       addLocalCollider(x, z, .9, .75, ground, ground + 1.2, `Airbase ${site.name}`);
     }
@@ -470,7 +438,7 @@ export function createJapanAirbase(
   root.add(supplies);
 
   // The windsock points downwind in the apron frame.
-  const windPoint = context.toWorld({ x: 310, z: 120 });
+  const windPoint = context.frame.toWorld({ x: 310, z: 120 });
   const windY = groundAt(windPoint);
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(.08, .12, 9, 8), darkMetal);
   pole.position.set(310, windY + 4.5, 120); root.add(pole);
@@ -496,7 +464,7 @@ export function createJapanAirbase(
       const baseColor = meshMaterial.color.clone();
       meshMaterial.color.set('#ffffff'); meshMaterial.vertexColors = true; meshMaterial.needsUpdate = true;
       materials.push(meshMaterial);
-      const mesh = new THREE.Mesh(makeRoadGeometry(road.points, width, lift, toApron, context.toWorld, groundAt), meshMaterial);
+      const mesh = new THREE.Mesh(makeRoadGeometry(road.points, width, lift, toApron, context.frame.toWorld, groundAt), meshMaterial);
       mesh.name = label; mesh.receiveShadow = true; root.add(mesh);
       burnableRoadMeshes.push({ mesh, baseColor });
     }
@@ -513,7 +481,7 @@ export function createJapanAirbase(
         }
         remaining -= segmentLength;
       }
-      const local = roadToLocal(point), world = context.toWorld(local);
+      const local = roadToLocal(point), world = context.frame.toWorld(local);
       vegetationExclusionZones.push({ x: world.x, z: world.z, radius: shoulderWidth * .5 + 18 });
     }
   };
@@ -523,11 +491,11 @@ export function createJapanAirbase(
   const parkingLot = new THREE.Mesh(new THREE.PlaneGeometry(92, 42), roadShoulder);
   parkingLot.name = 'Airbase service vehicle parking';
   parkingLot.rotation.x = -Math.PI / 2;
-  const parkingPoint = context.toWorld({ x: 140, z: 625 });
+  const parkingPoint = context.frame.toWorld({ x: 140, z: 625 });
   parkingLot.position.set(140, groundAt(parkingPoint) + .08, 625);
   root.add(parkingLot);
   for (let index = 0; index < 6; index++) {
-    const x = 107 + index * 15, linePoint = context.toWorld({ x, z: 625 });
+    const x = 107 + index * 15, linePoint = context.frame.toWorld({ x, z: 625 });
     addBox(root, [.22, .06, 18], [x, groundAt(linePoint) + .13, 625], paint, 'Airbase parking bay line');
   }
   addFootprint(140, 625, 75, true);
@@ -539,7 +507,7 @@ export function createJapanAirbase(
   lightPoles.name = 'Airbase perimeter light poles';
   let lightCount = 0;
   for (const [x, z] of [[-190,-80],[-190,60],[-190,220],[-190,520],[-190,730],[390,-80],[390,100],[390,320],[390,560],[390,760],[390,930],[220,935],[20,850]] as const) {
-    const point = context.toWorld({ x, z });
+    const point = context.frame.toWorld({ x, z });
     const ground = groundAt(point);
     lights.setMatrixAt(lightCount, new THREE.Matrix4().makeTranslation(x, ground + 3.9, z));
     lightPoles.setMatrixAt(lightCount, new THREE.Matrix4().makeTranslation(x, ground + 1.8, z));
@@ -550,14 +518,17 @@ export function createJapanAirbase(
   lightPoles.count = lightCount; lightPoles.instanceMatrix.needsUpdate = true; root.add(lightPoles);
 
   root.updateMatrixWorld(true);
-  const roadJoinIds = roads.filter(road => road.id.startsWith('japan-airbase-west-')).map(road => {
-    const join = road.points.at(-1)!;
-    return `${road.id}->sector-access-spine@${join.t.toFixed(1)},${join.s.toFixed(1)}`;
+  const roadJoinIds = siteGates.flatMap(gate => {
+    const road = geography.roads.find(item => item.id === gate.id);
+    if (!road) return [];
+    const endpoint = [road.points[0], road.points.at(-1)!]
+      .find(point => Math.hypot(point.t - gate.position.t, point.s - gate.position.s) < 1);
+    return endpoint ? [`${road.id}->gate@${endpoint.t.toFixed(1)},${endpoint.s.toFixed(1)}`] : [];
   });
-  const stats = { fenceMetres, fenceSections, buildingCount, gateCount: gateSpecs.length + 1, roadLengthMetres, roadJoinIds };
+  const stats = { fenceMetres, fenceSections, buildingCount, gateCount: siteGates.length, roadLengthMetres, roadJoinIds };
   // The runway end extends beyond the older circular airport tree clearance.
   for (let z = -120; z <= 900; z += 60) {
-    const world = context.toWorld({ x: 235, z });
+    const world = context.frame.toWorld({ x: 235, z });
     const zone = { x: world.x, z: world.z, radius: 85 };
     vegetationExclusionZones.push(zone);
     structureExclusionZones.push(zone);
@@ -583,7 +554,7 @@ export function createJapanAirbase(
         const colors = new Float32Array(position.count * 3);
         const tint = new THREE.Color();
         for (let index = 0; index < position.count; index++) {
-          const world = context.toWorld({ x: position.getX(index), z: position.getZ(index) });
+          const world = context.frame.toWorld({ x: position.getX(index), z: position.getZ(index) });
           const sample = field.sample(world.x, world.z);
           const charCore = smooth(.49, .77, sample.severity) * (1 - .58 * smooth(.28, .94, sample.age));
           const ashLayer = smooth(.23, .56, sample.severity) * smooth(.24, .79, sample.age) * (1 - .28 * charCore);

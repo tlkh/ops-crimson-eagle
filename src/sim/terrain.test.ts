@@ -2,24 +2,33 @@ import { describe, expect, it } from 'vitest';
 import { campaigns } from '../content';
 import type { Mission } from '../types';
 import { renderedTerrainHeight, setRenderedTerrainHeights, TERRAIN_GRID, terrainHeight } from './collision';
-import { CAMPAIGN_TERRAIN_ORIGIN } from '../content/terrainFrame';
+import { campaignTerrainFrame } from '../content/terrainFrame';
+import { createJapanAirbaseFrame } from '../content/airbaseLayout';
+
+function frameFor(mission: Mission) {
+  const campaign = campaigns.find(item => item.missions.some(candidate => candidate.id === mission.id))!;
+  return campaignTerrainFrame(campaign, mission);
+}
 
 function localPoint(mission: Mission, t: number, s: number) {
-  const target = mission.shore ?? mission.lake;
-  const dx = target.x - CAMPAIGN_TERRAIN_ORIGIN.x, dz = target.z - CAMPAIGN_TERRAIN_ORIGIN.z;
-  const length = Math.max(1, Math.hypot(dx, dz));
-  const ux = dx / length, uz = dz / length, sx = -uz, sz = ux;
-  return { x: CAMPAIGN_TERRAIN_ORIGIN.x + t * ux + s * sx, z: CAMPAIGN_TERRAIN_ORIGIN.z + t * uz + s * sz };
+  const { origin, ux, uz, sx, sz } = frameFor(mission);
+  return { x: origin.x + t * ux + s * sx, z: origin.z + t * uz + s * sz };
 }
 
 function coastAt(mission: Mission, s: number) {
-  const target = mission.shore ?? mission.lake;
-  const routeLength = Math.max(1, Math.hypot(target.x - CAMPAIGN_TERRAIN_ORIGIN.x, target.z - CAMPAIGN_TERRAIN_ORIGIN.z));
-  const coast = routeLength * .42;
-  return coast + 34 * Math.sin(s * .003) + 19 * Math.sin(s * .008 + .5);
+  return frameFor(mission).length * .42 + 34 * Math.sin(s * .003) + 19 * Math.sin(s * .008 + .5);
 }
 
 describe('shared terrain field', () => {
+  it('keeps the rotated runway and apron below their paved surfaces', () => {
+    const campaign = campaigns[1], mission = campaign.missions[0];
+    const frame = createJapanAirbaseFrame(campaign, mission);
+    for (let z = -120; z <= 880; z += 25) for (const x of [220, 235, 250]) {
+      const point = frame.toWorld({ x, z });
+      expect(renderedTerrainHeight(campaign, mission, point.x, point.z)).toBeLessThanOrEqual(0);
+      expect(renderedTerrainHeight(campaign, mission, point.x, point.z)).toBeGreaterThan(-1);
+    }
+  });
   it('keeps the same hills when switching sorties within a campaign', () => {
     for (const campaign of campaigns) {
       const first = campaign.missions[0];
@@ -37,8 +46,7 @@ describe('shared terrain field', () => {
     expect(TERRAIN_GRID).toEqual({ cols: 192, rows: 224, lateral: 4700, inland: 6500 });
 
     for (const campaign of campaigns) for (const mission of campaign.missions) {
-      const target = mission.shore ?? mission.lake;
-      const routeLength = Math.hypot(target.x - CAMPAIGN_TERRAIN_ORIGIN.x, target.z - CAMPAIGN_TERRAIN_ORIGIN.z);
+      const routeLength = frameFor(mission).length;
       const routePoint = localPoint(mission, routeLength * .72, 0);
       expect(terrainHeight(campaign, mission, routePoint.x, routePoint.z), `${campaign.id}/${mission.id} route`).not.toBeNull();
       expect(terrainHeight(campaign, mission, routePoint.x, routePoint.z)!).toBeLessThan(1);
@@ -53,8 +61,7 @@ describe('shared terrain field', () => {
   it('keeps the shore transition and drainage ribbon below the water surface', () => {
     for (const campaign of campaigns) {
       const mission = campaign.missions[0];
-      const target = mission.shore ?? mission.lake;
-      const routeLength = Math.hypot(target.x - CAMPAIGN_TERRAIN_ORIGIN.x, target.z - CAMPAIGN_TERRAIN_ORIGIN.z);
+      const routeLength = frameFor(mission).length;
       const coast = routeLength * .42;
       const s = 700;
       const shorePoint = localPoint(mission, coastAt(mission, s) - 2, s);
@@ -74,8 +81,7 @@ describe('shared terrain field', () => {
   it('creates rolling inland elevations while keeping their upper bound at 60 m', () => {
     for (const campaign of campaigns) {
       const mission = campaign.missions[0];
-      const target = mission.shore ?? mission.lake;
-      const routeLength = Math.hypot(target.x - CAMPAIGN_TERRAIN_ORIGIN.x, target.z - CAMPAIGN_TERRAIN_ORIGIN.z);
+      const routeLength = frameFor(mission).length;
       const coast = routeLength * .42;
       const heights: number[] = [];
       for (let t = Math.max(coast + 800, 1400); t <= 6200; t += 320) {

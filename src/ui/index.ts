@@ -9,6 +9,7 @@ import { musicTracks } from '../music';
 import { createMenu } from './menu';
 import { cinematicEffectsEnabled, setCinematicEffectsEnabled, graphicsMode, setGraphicsMode } from '../visualPreferences';
 import type { GraphicsMode } from '../render/quality';
+import type { FlightOverlay } from './flightOverlay';
 
 type Callbacks = {
   onSelect(campaignId: CampaignId, missionId: string): Promise<void>;
@@ -94,7 +95,7 @@ function bucketPositionCue(state: SimState) {
 export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Campaign[], initialMusicEnabled: boolean, initialVoiceEnabled: boolean): {
   showMenu(): void;
   showGame(state: SimState, campaign: Campaign, mission: Mission, landingFuel: number): void;
-  setPaused(paused: boolean): void;
+  setFlightOverlay(overlay: FlightOverlay): void;
   dispose(): void;
   getSceneHost(): HTMLElement;
 } {
@@ -109,7 +110,7 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
         </div>
       </div>
       <section class="sf-menu" data-menu></section>
-      <section class="sf-game" data-game aria-label="Flight controls" hidden>
+      <section class="sf-game" data-game data-overlay="flight" aria-label="Flight view" tabindex="-1" hidden>
         <header class="sf-topbar">
           <div class="sf-flight-title">
             <span class="sf-phase" data-phase>Preflight</span>
@@ -133,11 +134,11 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
               <span class="sf-sr-only" data-objective-announcement role="status" aria-live="polite" aria-atomic="true"></span>
             </div>
           </div>
+          <div class="sf-message" data-message role="status" hidden></div>
         </div>
         <div data-flight-hud></div>
-        <div class="sf-message" data-message role="status" hidden></div>
-        <aside class="sf-map-panel" data-map-panel hidden aria-label="Tactical map">
-          <div class="sf-map-head"><div><strong>Sortie map</strong><span data-map-scale>Local theatre</span></div><button type="button" class="sf-icon-button sf-map-close" data-close-map aria-label="Close tactical map">${icon('close')}</button></div>
+        <aside class="sf-map-panel" data-map-panel hidden role="dialog" aria-modal="true" aria-labelledby="sf-map-title">
+          <div class="sf-map-head"><div><strong id="sf-map-title">Sortie map</strong><span data-map-scale>Local theatre</span></div><button type="button" class="sf-icon-button sf-map-close" data-close-map aria-label="Close tactical map">${icon('close')}</button></div>
           <div class="sf-map-surface" data-map-surface>
             <span class="sf-map-water-label">SEA</span><span class="sf-map-land-label" data-map-region>KALIMANTAN</span>
             <svg class="sf-map-route" data-map-route viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline points="" /></svg>
@@ -163,7 +164,7 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
               <button class="sf-flight-action sf-drop" data-drop type="button" hidden>${icon('water')}<span>Release water</span></button>
               <button class="sf-flight-action" data-action type="button" hidden>${icon('target')}<span>Attach bucket</span></button>
             </div>
-            <button class="sf-flight-action sf-return" data-return type="button" aria-label="Set return route">${icon('home')}<span>Set return</span></button>
+            <button class="sf-flight-action sf-return" data-return type="button" aria-label="Set return destination">${icon('home')}<span>Set return</span></button>
           </div>
           <div class="sf-stick-wrap sf-stick-wrap--right">
             <div class="sf-stick-label"><b>CYCLIC</b><span>Bank · pitch</span></div>
@@ -174,7 +175,7 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
           </div>
         </div>
         <div class="sf-modal" data-pause-panel hidden role="dialog" aria-modal="true" aria-labelledby="sf-pause-title">
-          <div class="sf-modal-card"><button class="sf-modal-close" data-resume aria-label="Resume sortie">${icon('close')}</button><h2 id="sf-pause-title">Sortie paused</h2><p>Take a breath. Your aircraft and sling load are waiting where you left them.</p>${musicButton('sf-menu-music sf-pause-music')}${radioButton('sf-menu-music sf-pause-radio')}<button type="button" class="sf-menu-music" data-cinematic aria-pressed="${cinematicEffectsEnabled()}">Cinematic effects ${cinematicEffectsEnabled() ? 'on' : 'off'}</button><div class="sf-modal-actions"><button class="sf-primary" data-resume>${icon('play')} Resume sortie</button><button data-restart>${icon('restart')} Restart mission</button><button data-briefing>${icon('arrow')} Mission selection</button></div></div>
+          <div class="sf-modal-card"><button class="sf-modal-close" data-resume aria-label="Resume sortie">${icon('close')}</button><h2 id="sf-pause-title">Sortie paused</h2><p>Your aircraft and sling load are waiting where you left them.</p><div class="sf-pause-controls" aria-label="Keyboard flight controls"><strong>Flight controls</strong><p>W / S lift · A / D turn · Arrow keys bank / pitch</p><p>E use nearby action · Space release water · R set return · M map · Esc pause or resume</p><small>Heading is manual. Set return changes your destination; you fly the route.</small></div>${musicButton('sf-menu-music sf-pause-music')}${radioButton('sf-menu-music sf-pause-radio')}<button type="button" class="sf-menu-music" data-cinematic aria-pressed="${cinematicEffectsEnabled()}">Cinematic effects ${cinematicEffectsEnabled() ? 'on' : 'off'}</button><div class="sf-modal-actions"><button class="sf-primary" data-resume>${icon('play')} Resume sortie</button><button data-restart>${icon('restart')} Restart mission</button><button data-briefing>${icon('arrow')} Mission selection</button></div></div>
         </div>
         <div class="sf-modal" data-outcome-panel hidden role="dialog" aria-modal="true" aria-labelledby="sf-outcome-title">
           <div class="sf-modal-card"><span class="sf-outcome-mark" data-outcome-mark></span><h2 data-outcome-title id="sf-outcome-title">Debrief</h2><p data-outcome-copy></p><div class="sf-modal-actions"><button class="sf-primary" data-restart>${icon('restart')} Fly again</button><button data-briefing>${icon('arrow')} Choose another mission</button></div></div>
@@ -209,8 +210,6 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
   const flightHudHost = by<HTMLElement>('[data-flight-hud]');
   const flightHud = createFlightHud(flightHudHost);
   by<HTMLElement>('[data-objective]').after(flightHudHost.querySelector('.sf-compass')!);
-  let mapOpen = false;
-  let paused = false;
   let disposed = false;
   let musicEnabled = initialMusicEnabled;
   let voiceEnabled = initialVoiceEnabled;
@@ -257,6 +256,7 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     button.innerHTML = `${icon(voiceEnabled ? 'radio' : 'radioOff')}<span>Radio ${voiceEnabled ? 'on' : 'off'}</span>`;
   });
   const syncMapButton = () => {
+    const mapOpen = game.dataset.overlay === 'map';
     const label = `${mapOpen ? 'Close' : 'Open'} tactical map`;
     const button = by<HTMLButtonElement>('[data-map]');
     button.setAttribute('aria-pressed', String(mapOpen));
@@ -287,26 +287,39 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
       stick.querySelector<HTMLElement>('.sf-stick-knob')!.style.transform = 'translate(-50%, -50%)';
     });
   };
+  const releaseOnVisibility = () => { if (document.hidden) releaseSticks(); };
+  window.addEventListener('blur', releaseSticks);
+  window.addEventListener('orientationchange', releaseSticks);
+  document.addEventListener('visibilitychange', releaseOnVisibility);
 
   const syncDialog = (panel: HTMLElement | null) => {
     if (activeDialog === panel) return;
     if (panel && !activeDialog && document.activeElement instanceof HTMLElement) dialogReturnFocus = document.activeElement;
     activeDialog = panel;
     for (const child of Array.from(game.children)) {
-      if (child !== pausePanel && child !== outcomePanel) (child as HTMLElement).inert = !!panel;
+      if (child !== panel) (child as HTMLElement).inert = !!panel;
+      else (child as HTMLElement).inert = false;
     }
     sceneHost.inert = !!panel;
-    if (panel) queueMicrotask(() => panel.querySelector<HTMLButtonElement>('.sf-primary')?.focus());
+    by<HTMLElement>('[data-bucket-hud]').inert = !!panel;
+    if (panel) queueMicrotask(() => {
+      if (activeDialog !== panel) return;
+      (panel.querySelector<HTMLElement>('.sf-primary, [data-close-map]') ?? panel).focus();
+    });
     else if (dialogReturnFocus?.isConnected) {
       dialogReturnFocus.focus();
       dialogReturnFocus = null;
     }
   };
 
-  const syncPaused = (value: boolean) => {
-    paused = value;
-    pausePanel.hidden = !paused;
-    syncDialog(paused ? pausePanel : outcomePanel.hidden ? null : outcomePanel);
+  const setFlightOverlay = (overlay: FlightOverlay) => {
+    if (overlay !== 'flight') releaseSticks();
+    game.dataset.overlay = overlay;
+    const paused = overlay === 'pause';
+    mapPanel.hidden = overlay !== 'map';
+    pausePanel.hidden = !paused || game.dataset.terminal === 'true';
+    syncMapButton();
+    syncDialog(!outcomePanel.hidden ? outcomePanel : overlay === 'map' ? mapPanel : pausePanel.hidden ? null : pausePanel);
     const button = by<HTMLButtonElement>('[data-pause]');
     const label = paused ? 'Resume sortie' : 'Pause sortie';
     button.setAttribute('aria-pressed', String(paused));
@@ -318,11 +331,12 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     cancelObjectiveTitleAnimation();
     crashStartedAt = null;
     game.dataset.crashing = 'false';
-    mapOpen = false;
+    game.dataset.overlay = 'flight';
+    game.dataset.terminal = 'false';
     mapPanel.hidden = true;
-    syncMapButton();
-    syncPaused(false);
+    pausePanel.hidden = true;
     outcomePanel.hidden = true;
+    syncMapButton();
     syncDialog(null);
     releaseSticks();
   };
@@ -394,51 +408,27 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
-      if (activeDialog === pausePanel) {
-        syncPaused(false);
-        dispatchCommand('resume');
-      }
+      if (!event.repeat && activeDialog !== outcomePanel) dispatchCommand('escape');
       return;
     }
     if (event.key !== 'Tab') return;
-    const buttons = Array.from(activeDialog.querySelectorAll<HTMLButtonElement>('button:not([disabled])'));
-    if (!buttons.length) return;
-    const first = buttons[0];
-    const last = buttons[buttons.length - 1];
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    const focusable = Array.from(activeDialog.querySelectorAll<HTMLElement>('button:not([disabled]), select:not([disabled]), input:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"])'))
+      .filter(node => !node.closest('[hidden]') && !node.inert);
+    if (!focusable.length) { event.preventDefault(); activeDialog.focus(); return; }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && (document.activeElement === first || !activeDialog.contains(document.activeElement))) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && (document.activeElement === last || !activeDialog.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
   });
-  on('[data-map]', 'click', () => {
-    mapOpen = !mapOpen;
-    mapPanel.hidden = !mapOpen;
-    syncMapButton();
-    dispatchCommand('map');
-  });
-  on('[data-close-map]', 'click', () => {
-    mapOpen = false;
-    mapPanel.hidden = true;
-    syncMapButton();
-    dispatchCommand('map');
-  });
-  on('[data-pause]', 'click', () => {
-    if (mapOpen) {
-      mapOpen = false;
-      mapPanel.hidden = true;
-      syncMapButton();
-      dispatchCommand('map');
-    }
-    syncPaused(!paused);
-    dispatchCommand('togglePause');
-  });
+  on('[data-map]', 'click', () => dispatchCommand('map'));
+  on('[data-close-map]', 'click', () => dispatchCommand('map'));
+  on('[data-pause]', 'click', () => dispatchCommand('togglePause'));
   on('[data-menu-button]', 'click', () => { releaseSticks(); dispatchCommand('menu'); });
   on('[data-drop]', 'click', () => dispatchCommand('drop'));
   on('[data-action]', 'click', () => dispatchCommand(by<HTMLButtonElement>('[data-action]').dataset.command || 'action'));
   on('[data-return]', 'click', () => dispatchCommand('return'));
-  root.querySelectorAll<HTMLElement>('[data-resume]').forEach(button => button.addEventListener('click', () => {
-    syncPaused(false);
-    dispatchCommand('resume');
-  }));
-  root.querySelectorAll<HTMLElement>('[data-restart]').forEach(button => button.addEventListener('click', () => { resetTransientUI(); dispatchCommand('restart'); }));
+  root.querySelectorAll<HTMLElement>('[data-resume]').forEach(button => button.addEventListener('click', () => dispatchCommand('resume')));
+  root.querySelectorAll<HTMLElement>('[data-restart]').forEach(button => button.addEventListener('click', () => dispatchCommand('restart')));
   root.querySelectorAll<HTMLElement>('[data-briefing]').forEach(button => button.addEventListener('click', () => { releaseSticks(); dispatchCommand('menu'); }));
 
   root.querySelectorAll<HTMLElement>('[data-stick]').forEach(stick => {
@@ -517,14 +507,15 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     game.hidden = true;
     menu.hidden = false;
     resetTransientUI();
+    by<HTMLElement>('[data-bucket-hud]').hidden = true;
     lastTick = -1;
     lastTime = -1;
     menuController.showCampaigns();
     if (returningFromGame) menu.querySelector<HTMLButtonElement>('.cm-campaign-card[aria-current="true"], .cm-campaign-card')?.focus();
   };
-  const setPaused = (value: boolean) => syncPaused(value);
   const showGame = (state: SimState, campaign: Campaign, mission: Mission, landingFuel: number) => {
     if (disposed) return;
+    const enteringFlight = app.dataset.screen !== 'game';
     if (currentMission?.id !== mission.id || currentCampaign?.id !== campaign.id || (lastTick >= 0 && (state.tick < lastTick || state.timeSec < lastTime))) {
       resetTransientUI();
       currentCampaign = campaign;
@@ -533,6 +524,9 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     app.dataset.screen = 'game';
     game.hidden = false;
     menu.hidden = true;
+    if (enteringFlight) queueMicrotask(() => {
+      if (app.dataset.screen === 'game' && game.dataset.overlay === 'flight' && game.dataset.terminal !== 'true') game.focus();
+    });
     const phase = by('[data-phase]');
     phase.textContent = phaseName(state.phase);
     by('[data-mission-title]').textContent = mission.title;
@@ -722,6 +716,7 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     const showMessage = !activeOperation && !!state.message && (!state.messageUntil || state.timeSec <= state.messageUntil);
     message.hidden = !showMessage;
     if (showMessage) message.textContent = state.message;
+    message.dataset.tone = state.phase === 'failed' || state.message === 'Fuel exhausted. Land immediately.' ? 'urgent' : 'routine';
     const drop = by<HTMLButtonElement>('[data-drop]');
     const action = by<HTMLButtonElement>('[data-action]');
     const context = objectiveAction ? contextualActions[objectiveAction] : undefined;
@@ -747,15 +742,17 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
     by('[data-map-fire]').setAttribute('aria-label', `Fire line, ${Math.round(targetDist)} metres from aircraft`);
     by('[data-map-lake]').setAttribute('aria-label', `Freshwater lake, ${Math.round(mission.lake.radius).toLocaleString()} metre radius`);
     const mapCallout = by<HTMLElement>('[data-map-panel]');
-    mapCallout.setAttribute('data-open', String(mapOpen));
+    mapCallout.setAttribute('data-open', String(game.dataset.overlay === 'map'));
     updateMap(state, campaign, mission);
     const collisionFailure = state.phase === 'failed' && (state as ExtendedSimState).failureCause === 'collision';
     if (collisionFailure && crashStartedAt === null) crashStartedAt = performance.now();
     const crashPlaying = collisionFailure && crashStartedAt !== null && performance.now() - crashStartedAt < 2400;
     game.dataset.crashing = String(crashPlaying);
     const terminal = state.outcome !== 'none' || state.phase === 'debrief' || state.phase === 'failed';
+    game.dataset.terminal = String(terminal);
     outcomePanel.hidden = !terminal || crashPlaying;
-    syncDialog(terminal && !crashPlaying ? outcomePanel : paused ? pausePanel : null);
+    pausePanel.hidden = game.dataset.overlay !== 'pause' || terminal;
+    syncDialog(terminal && !crashPlaying ? outcomePanel : game.dataset.overlay === 'map' ? mapPanel : pausePanel.hidden ? null : pausePanel);
     if (terminal) {
       const success = state.outcome === 'success';
       by('[data-outcome-title]').textContent = collisionFailure ? 'Aircraft destroyed' : success ? 'Water delivered' : state.outcome === 'failed' ? 'Sortie ended early' : 'Crew debrief';
@@ -775,12 +772,15 @@ export function createUI(root: HTMLElement, callbacks: Callbacks, campaigns: Cam
   return {
     showMenu,
     showGame,
-    setPaused,
+    setFlightOverlay,
     getSceneHost: () => sceneHost,
     dispose() {
       disposed = true;
       cancelObjectiveTitleAnimation();
       menuController.dispose();
+      window.removeEventListener('blur', releaseSticks);
+      window.removeEventListener('orientationchange', releaseSticks);
+      document.removeEventListener('visibilitychange', releaseOnVisibility);
       releaseSticks();
       callbacks.onControls({ yaw: 0, climb: 0, cyclicX: 0, cyclicY: 0 });
       root.innerHTML = '';

@@ -1,8 +1,11 @@
 import { createScene } from '../../src/render';
 import { campaigns } from '../../src/content';
 import { campaignTerrainFrame } from '../../src/content/terrainFrame';
+import { createJapanAirbaseFrame } from '../../src/content/airbaseLayout';
+import { sampleFireResponse } from '../../src/sim/fireResponse';
 import { getCampaignGeography } from '../../src/content/geography';
 import { createSim } from '../../src/sim';
+import { shipLandingLocalZ, shipToWorld } from '../../src/sim/shipLanding';
 import type { ExtendedSimState } from '../../src/sim/types';
 import type { GraphicsMode } from '../../src/render/quality';
 
@@ -30,6 +33,10 @@ viewSelect.add(new Option('airbase', 'airbase'));
 viewSelect.add(new Option('airbase-facilities', 'airbase-facilities'));
 viewSelect.add(new Option('lake-overview', 'lake-overview'));
 viewSelect.add(new Option('road-end', 'road-end'));
+viewSelect.add(new Option('fire-crews', 'fire-crews'));
+viewSelect.add(new Option('road-traffic', 'road-traffic'));
+for (const view of ['roads-overview', 'settlement', 'road-junction', 'coastal-access', 'destination']) viewSelect.add(new Option(view, view));
+for (const view of ['ship-overview', 'ship-broadside', 'ship-deck', 'ship-bow']) viewSelect.add(new Option(view, view));
 campaignSelect.value = params.get('campaign') === 'jp' ? 'jp' : 'sg';
 viewSelect.value = params.get('view') ?? 'deck';
 qualitySelect.value = params.get('quality') ?? 'high';
@@ -37,8 +44,10 @@ missionSelect.value = params.get('mission') ?? (viewSelect.value === 'night' ? '
 stageSelect.value = params.get('stage') ?? 'burning';
 let scene: ReturnType<typeof createScene>;
 let campaign = campaigns[0], mission = campaign.missions[0];
+let geography = getCampaignGeography(campaign);
 let state: ExtendedSimState;
-let paused = false;
+let paused = params.get('paused') === '1';
+document.querySelector('#pause')!.textContent = paused ? 'Resume' : 'Pause';
 let frameCount = 0;
 let lastMetrics = 0;
 const host = document.querySelector<HTMLElement>('#scene')!;
@@ -48,11 +57,12 @@ function rebuild() {
   scene?.dispose();
   campaign = campaigns[campaignSelect.value === 'jp' ? 1 : 0];
   mission = campaign.missions[Number(missionSelect.value) || 0];
+  geography = getCampaignGeography(campaign);
   state = createSim(campaign, mission) as ExtendedSimState;
-  state.timeSec = viewSelect.value === 'night' ? 35 : Number(params.get('time') ?? 180);
-  state.heading = Math.PI;
+  state.timeSec = Number(params.get('time') ?? (viewSelect.value === 'night' ? 35 : 180));
+  state.heading = Math.PI + mission.shipHeading;
   applyFireState();
-  if (viewSelect.value !== 'deck' && viewSelect.value !== 'night') {
+  if (viewSelect.value !== 'deck' && viewSelect.value !== 'night' && !viewSelect.value.startsWith('ship-')) {
     const nearFire = viewSelect.value === 'fire' || viewSelect.value === 'burn-trail';
     const point = nearFire ? mission.fire : mission.lake;
     state.phase = 'work'; state.bucketAttached = true;
@@ -101,22 +111,69 @@ document.querySelector('#capture')!.addEventListener('click', () => {
 });
 rebuild();
 function fixtureCamera() {
+  if (['roads-overview', 'settlement', 'road-junction', 'coastal-access', 'destination'].includes(viewSelect.value)) {
+    const { origin, ux, uz, sx, sz } = campaignTerrainFrame(campaign);
+    const at = (t: number, s: number, y: number) => ({ x: origin.x + t * ux + s * sx, y, z: origin.z + t * uz + s * sz });
+    if (viewSelect.value === 'roads-overview') return {
+      position: at(3150, 0, 5400), target: at(3151, 0, 0), fov: 80,
+    };
+    const site = viewSelect.value === 'road-junction'
+      ? geography.junctions[Number(params.get('junction') ?? 0)]?.position
+      : viewSelect.value === 'coastal-access'
+        ? geography.destinations.find(item => item.kind === 'coastal')?.position
+        : viewSelect.value === 'destination'
+          ? geography.destinations.find(item => item.id === params.get('site'))?.position
+        : geography.settlements.find(item => item.id === (params.get('site') ?? 'village'))?.position;
+    const zoom = Math.max(.15, Math.min(3, Number(params.get('zoom') ?? 1) || 1));
+    if (site) return {
+      position: at(site.t - 180 * zoom, site.s + 210 * zoom, 255 * zoom), target: at(site.t, site.s, 0), fov: 52,
+    };
+  }
+  if (viewSelect.value.startsWith('ship-')) {
+    const stern = campaign.id === 'jp_ketapang_2026_09' ? 40 : 35;
+    const center = stern - campaign.shipLength / 2;
+    const point = (x: number, y: number, z: number) => ({ ...shipToWorld(mission, { x, z }), y });
+    const aspect = host.clientWidth / Math.max(1, host.clientHeight);
+    const distance = Math.max(210, campaign.shipLength * 1.18 / (2 * Math.tan(Math.PI / 9) * aspect));
+    if (viewSelect.value === 'ship-broadside') return {
+      position: point(distance, 8 + distance * .08, center + 8), target: point(0, 5, center), fov: 40,
+    };
+    if (viewSelect.value === 'ship-deck') return {
+      position: point(campaign.shipWidth * .85, 22, stern + 27),
+      target: point(0, -2.525, shipLandingLocalZ(campaign) - 8), fov: 48,
+    };
+    if (viewSelect.value === 'ship-bow') return {
+      position: point(-campaign.shipWidth * 2.1, 26, stern - campaign.shipLength - 45),
+      target: point(0, 4, stern - campaign.shipLength * .75), fov: 48,
+    };
+    return {
+      position: point(distance * .6, distance * .44, center + distance * .75),
+      target: point(0, 1, center), fov: 40,
+    };
+  }
+  if (viewSelect.value === 'fire-crews' || viewSelect.value === 'road-traffic') {
+    const response = sampleFireResponse(campaign, mission, state.timeSec, state.fireState === 'secured');
+    const engine = response.engines[viewSelect.value === 'fire-crews' ? 0 : 1];
+    const target = { ...engine.position, y: engine.position.y + 1 };
+    const offset = viewSelect.value === 'fire-crews' ? 26 : 19;
+    return {
+      position: { x: target.x + Math.cos(engine.heading) * offset - Math.sin(engine.heading) * 17, y: target.y + 14,
+        z: target.z - Math.sin(engine.heading) * offset - Math.cos(engine.heading) * 17 }, target, fov: 50,
+    };
+  }
   if (viewSelect.value === 'lake-overview') return {
     position: { x: mission.lake.x + 60, y: 720, z: mission.lake.z - 220 },
     target: { x: mission.lake.x, y: 0, z: mission.lake.z }, fov: 50,
   };
   if (viewSelect.value === 'road-end') {
-    const end = getCampaignGeography(campaign).roads.find(road => road.id === `sector-access-${mission.id.toLowerCase()}`)!.points.at(-1)!;
+    const end = geography.roads.find(road => road.id === `sector-access-${mission.id.toLowerCase()}`)!.points.at(-1)!;
     const { origin, ux, uz, sx, sz } = campaignTerrainFrame(campaign, mission);
     const target = { x: origin.x + end.t * ux + end.s * sx, y: 0, z: origin.z + end.t * uz + end.s * sz };
     return { position: { x: target.x - 120, y: 145, z: target.z - 140 }, target, fov: 50 };
   }
   if (!viewSelect.value.startsWith('airbase') || !mission.shore) return undefined;
-  const { ux, uz } = campaignTerrainFrame(campaign, mission);
-  const point = (x: number, y: number, z: number) => ({
-    x: mission.shore!.x + x * uz + z * ux, y,
-    z: mission.shore!.z - x * ux + z * uz,
-  });
+  const airbaseFrame = createJapanAirbaseFrame(campaign, mission);
+  const point = (x: number, y: number, z: number) => ({ ...airbaseFrame.toWorld({ x, z }), y });
   return viewSelect.value === 'airbase-facilities'
     ? { position: point(-320, 280, -200), target: point(0, 0, 140), fov: 48 }
     : { position: point(-850, 1250, 1300), target: point(25, 0, 350), fov: 50 };
@@ -131,7 +188,7 @@ function frame(now: number) {
   else if (scene.renderScheduledFrame(now, paused)) frameCount++;
   if (now - lastMetrics > 1000) {
     const d = scene.diagnostics();
-    output.value = `${mission.id} · ${viewSelect.value} · ${qualitySelect.value} · ${state.fireState}\n${d.width} × ${d.height} · target ${d.targetFps} FPS · level ${d.qualityLevel}\nCPU ${d.cpuSubmissionMs.toFixed(1)} ms · GPU ${d.gpuMs?.toFixed(1) ?? 'unavailable'} ms\nFrame interval p50/p95 ${d.frameIntervalP50Ms.toFixed(1)} / ${d.frameIntervalP95Ms.toFixed(1)} ms\n${d.calls} draws · ${d.triangles.toLocaleString()} triangles\n${d.textures} textures · ${d.geometries} geometries · scene ${(d.estimatedSceneBytes/1048576).toFixed(1)} MiB + post ${(d.renderTargetBytes/1048576).toFixed(1)} MiB\nDamaged trees ${d.burnedTrees} · bare ${d.charredTrees} · branch tris ${d.damageTriangles}\nRendered ${frameCount} · simulation ${state.timeSec.toFixed(1)} s`;
+    output.value = `${mission.id} · ${viewSelect.value} · ${qualitySelect.value} · ${state.fireState}\n${d.width} × ${d.height} · target ${d.targetFps} FPS · level ${d.qualityLevel}\nCPU ${d.cpuSubmissionMs.toFixed(1)} ms · GPU ${d.gpuMs?.toFixed(1) ?? 'unavailable'} ms\nFrame interval p50/p95 ${d.frameIntervalP50Ms.toFixed(1)} / ${d.frameIntervalP95Ms.toFixed(1)} ms\n${d.calls} draws · ${d.triangles.toLocaleString()} triangles\n${d.textures} textures · ${d.geometries} geometries · scene ${(d.estimatedSceneBytes/1048576).toFixed(1)} MiB + post ${(d.renderTargetBytes/1048576).toFixed(1)} MiB\nTrees ${d.woodyPlants.toLocaleString()} · roads ${(d.roadLengthM / 1000).toFixed(1)} km\nDamaged trees ${d.burnedTrees} · bare ${d.charredTrees} · branch tris ${d.damageTriangles}\nRendered ${frameCount} · simulation ${state.timeSec.toFixed(1)} s`;
     lastMetrics = now;
   }
   requestAnimationFrame(frame);

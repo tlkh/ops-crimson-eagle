@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Campaign, Mission } from '../types';
-import { createLaunchGuard, isMissionUnlocked, selectInitialMission } from './menuState';
+import { WORLD_REVISION } from '../worldRevision';
+import { createLaunchGuard, isMissionUnlocked, selectInitialMission, summarizeCheckpoint } from './menuState';
 
 const mission = (id: string, title = `Mission ${id}`): Mission => ({ id, title } as Mission);
 
@@ -34,6 +35,55 @@ describe('mission menu selection', () => {
     expect(selectInitialMission(testCampaign, {}, 'two')).toBe(missions[0]);
     expect(selectInitialMission(testCampaign, {}, 'missing')).toBe(missions[0]);
     expect(selectInitialMission(testCampaign, { one: { outcome: 'success' } }, 'two')).toBe(missions[1]);
+  });
+});
+
+describe('checkpoint briefing summary', () => {
+  const active = (overrides: Record<string, unknown> = {}) => ({
+    campaignId: 'sg_fictional_2026_10',
+    missionId: 'mission-1',
+    phase: 'transit',
+    outcome: 'none',
+    timeSec: 136,
+    worldRevision: 0,
+    ...overrides,
+  } as Parameters<typeof summarizeCheckpoint>[0]);
+
+  it('summarizes a matching active checkpoint with phase and elapsed time', () => {
+    expect(summarizeCheckpoint(active(), 'sg_fictional_2026_10', 'mission-1')).toEqual({
+      phase: 'In transit',
+      elapsed: '2m 16s',
+      subtitle: 'In transit · 2m 16s elapsed · Saved position will be checked at launch',
+    });
+  });
+
+  it('ignores checkpoints for another campaign or mission', () => {
+    expect(summarizeCheckpoint(active(), 'jp_ketapang_2026_09', 'mission-1')).toBeNull();
+    expect(summarizeCheckpoint(active(), 'sg_fictional_2026_10', 'mission-2')).toBeNull();
+  });
+
+  it('does not offer terminal, invalid, or malformed checkpoints', () => {
+    for (const checkpoint of [
+      null,
+      active({ phase: 'debrief' }),
+      active({ phase: 'failed' }),
+      active({ outcome: 'success' }),
+      active({ outcome: 'failed' }),
+      active({ phase: 'unknown' }),
+      active({ timeSec: Number.NaN }),
+      active({ timeSec: -1 }),
+    ]) {
+      expect(summarizeCheckpoint(checkpoint, 'sg_fictional_2026_10', 'mission-1')).toBeNull();
+    }
+  });
+
+  it('formats long missions without losing the hour count', () => {
+    expect(summarizeCheckpoint(active({ timeSec: 3725 }), 'sg_fictional_2026_10', 'mission-1')?.elapsed).toBe('1h 2m');
+  });
+
+  it('omits the revision caveat when the saved world is current', () => {
+    expect(summarizeCheckpoint(active({ worldRevision: WORLD_REVISION, phase: 'work' }), 'sg_fictional_2026_10', 'mission-1')?.subtitle)
+      .toBe('Working the fire · 2m 16s elapsed');
   });
 });
 

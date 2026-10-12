@@ -118,7 +118,7 @@
 .sf-game .sf-objective-kicker {
   display: block;
   color: #f0c872;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 800;
   line-height: 1.15;
   letter-spacing: .17em;
@@ -139,7 +139,7 @@
   margin-top: 2px;
   padding: 4px 12px;
   color: #fff2d6;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1.25;
   font-variant-numeric: tabular-nums;
@@ -183,8 +183,8 @@
 .sf-game .sf-readouts .sf-compass [data-bearing-bug] { color: #ffd380; }
 .sf-game .sf-readouts .sf-compass [data-bearing-bug] path { fill: #24312b; stroke-width: 1.5; }
 .sf-game .sf-readouts .sf-compass [data-bearing-bug].is-off-scale path { fill: #ffd380; }
-.sf-game .sf-readouts .sf-compass-target { display: flex; justify-content: center; align-items: center; gap: 7px; padding-top: 1px; color: #ffe0a3; font-size: 9px; }
-.sf-game .sf-readouts .sf-compass-target [data-guidance] { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-game .sf-readouts .sf-compass-target { display: flex; justify-content: center; align-items: center; gap: 7px; padding-top: 1px; color: #ffe0a3; font-size: 12px; line-height: 1.25; }
+.sf-game .sf-readouts .sf-compass-target [data-guidance] { min-width: 0; white-space: normal; }
 .sf-game .sf-readouts .sf-target-diamond { width: 6px; height: 6px; flex: 0 0 6px; border: 1px solid currentColor; transform: rotate(45deg); }
 
 /* Compact tapes keep the primary number legible without dominating the view. */
@@ -200,18 +200,18 @@
 .sf-game .sf-payload-instrument,
 .sf-game .sf-fuel-instrument { opacity: 1; }
 .sf-game .sf-payload-instrument .sf-instrument-title,
-.sf-game .sf-fuel-instrument .sf-instrument-title { font-size: 9px; }
+.sf-game .sf-fuel-instrument .sf-instrument-title { font-size: 11px; }
 .sf-game .sf-payload-value { gap: 7px; font-size: 15px; }
 .sf-game .sf-payload-value svg { width: 13px; height: 17px; }
-.sf-game .sf-payload-position { font-size: 9px; }
+.sf-game .sf-payload-position { font-size: 11px; }
 .sf-game .sf-fuel-instrument { width: 140px; }
 .sf-game .sf-fuel-heading b { font-size: 17px; }
-.sf-game .sf-fuel-heading b small { font-size: 8px; }
+.sf-game .sf-fuel-heading b small { font-size: 11px; }
 .sf-game .sf-fuel-gauge { padding-block: 8px 6px; }
 .sf-game .sf-fuel-gauge i { height: 8px; }
-.sf-game .sf-fuel-return { font-size: 7px; }
-.sf-game .sf-fuel-return b { font-size: 10px; }
-.sf-game .sf-fuel-advisory { font-size: 9px; opacity: 1; }
+.sf-game .sf-fuel-return { font-size: 11px; }
+.sf-game .sf-fuel-return b { font-size: 11px; }
+.sf-game .sf-fuel-advisory { font-size: 11px; opacity: 1; }
 .sf-game .sf-fuel-instrument[data-fuel-status="caution"],
 .sf-game .sf-fuel-instrument[data-fuel-status="critical"] { opacity: 1; }
 
@@ -232,17 +232,67 @@
   transform: translateX(-50%);
   pointer-events: none;
 }
-.sf-game .sf-stick-label b { font-size: 8px; line-height: 1.05; }
-.sf-game .sf-stick-label span { color: #f1ead4; font-size: 8px; line-height: 1.05; }
+.sf-game .sf-stick-label b { font-size: 11px; line-height: 1.05; }
+.sf-game .sf-stick-label span { color: #f1ead4; font-size: 11px; line-height: 1.05; }
 
-/* Move transient feedback below the guidance stack. */
-.sf-game .sf-message { top: 50%; }
+/* Transient feedback belongs to the objective and bearing stack. */
+.sf-game .sf-readouts .sf-message {
+  position: relative;
+  z-index: 2;
+  top: auto;
+  left: auto;
+  width: max-content;
+  max-width: 100%;
+  margin-top: 7px;
+  padding: 5px 10px;
+  font-size: 12px;
+  line-height: 1.3;
+  transform: none;
+}
+.sf-game .sf-message[data-tone="urgent"] { border-color: #ffafa0; background: #4a211bea; color: #fff0e9; }
+
+/* The tactical map is a paused viewport surface with one protected focus area. */
+.sf-game[data-overlay="map"] > :not([data-map-panel]) { visibility: hidden; }
+.sf-game .sf-map-panel {
+  position: absolute;
+  z-index: 6;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  padding: calc(18px + env(safe-area-inset-top, 0px)) calc(18px + env(safe-area-inset-right, 0px)) calc(18px + env(safe-area-inset-bottom, 0px)) calc(18px + env(safe-area-inset-left, 0px));
+  overflow: auto;
+  background: #101b18f8;
+}
+.sf-game .sf-map-head,
+.sf-game .sf-map-surface,
+.sf-game .sf-map-legend { width: min(100%, 1000px); margin-inline: auto; }
+.sf-game .sf-map-head strong { font-size: 25px; }
+.sf-game .sf-map-head span,
+.sf-game .sf-map-legend { font-size: 11px; }
+.sf-game .sf-map-surface { height: 100%; min-height: 0; }
+.sf-game .sf-map-water-label,
+.sf-game .sf-map-land-label { font-size: 11px; }
+.sf-game .sf-map-legend { justify-content: flex-start; gap: 10px 22px; }
+.sf-game .sf-map-legend i { width: 10px; height: 10px; }
+.sf-game .sf-map-close { width: 44px; min-width: 44px; height: 44px; }
+.sf-game .sf-pause-controls { margin: -9px 0 16px; padding: 10px 12px; background: #1c3028; color: #e9e7d8; }
+.sf-game .sf-pause-controls strong { font-size: 12px; }
+.sf-game .sf-pause-controls p { margin: 5px 0; font-size: 11px; line-height: 1.35; }
+.sf-game .sf-pause-controls small { display: block; margin-top: 7px; color: #e2d0a7; font-size: 11px; line-height: 1.35; }
+.sf-game .sf-flight-action span { font-size: 11px; }
+.sf-game .sf-instrument-title,
+.sf-game .sf-instrument-foot,
+.sf-game .sf-instrument-foot small,
+.sf-game .sf-sortie-strip small { font-size: 11px; }
 
 @media (max-width: 720px) {
   .sf-game .sf-readouts { top: calc(122px + env(safe-area-inset-top, 0px)); width: calc(100% - 18px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)); }
   .sf-game .sf-objective-copy strong { font-size: 16px; }
-  .sf-game .sf-objective-kicker { font-size: 7px; }
-  .sf-game .sf-objective-copy > span:not(.sf-sr-only) { font-size: 9px; }
+  .sf-game .sf-objective-kicker { font-size: 11px; }
+  .sf-game .sf-objective-copy > span:not(.sf-sr-only) { font-size: 12px; }
   .sf-game .sf-readouts .sf-compass { width: min(320px, 100%); }
   .sf-game .sf-readouts .sf-compass-scale { height: 38px; }
   .sf-game .sf-readouts .sf-compass-readout { height: 22px; }
@@ -264,6 +314,8 @@
 @media (max-width: 520px) and (orientation: portrait) {
   .sf-game .sf-readouts { top: calc(126px + env(safe-area-inset-top, 0px)); }
   .sf-game .sf-readouts .sf-compass { width: min(286px, 100%); }
+  .sf-game .sf-readouts .sf-message { max-width: min(90vw, 310px); }
+  .sf-game .sf-sortie-strip { display: none; }
 }
 
 @media (max-width: 360px) {
@@ -280,27 +332,27 @@
   .sf-game .sf-objective { padding: 0 5px 1px; }
   .sf-game .sf-objective-copy { gap: 1px; }
   .sf-game .sf-objective-copy strong { font-size: 16px; }
-  .sf-game .sf-objective-copy > span:not(.sf-sr-only) { margin-top: 1px; padding-block: 3px; font-size: 8px; }
-  .sf-game .sf-objective-kicker { font-size: 7px; }
+  .sf-game .sf-objective-copy > span:not(.sf-sr-only) { margin-top: 1px; padding-block: 3px; font-size: 12px; }
+  .sf-game .sf-objective-kicker { display: none; }
   .sf-game .sf-readouts .sf-compass { width: min(270px, 100%); }
   .sf-game .sf-readouts .sf-compass-readout { height: 18px; }
   .sf-game .sf-readouts .sf-compass-readout b { font-size: 18px; }
   .sf-game .sf-readouts .sf-compass-scale { height: 26px; }
-  .sf-game .sf-readouts .sf-compass-scale text { font-size: 9px; }
-  .sf-game .sf-readouts .sf-compass-scale .is-cardinal text { font-size: 10px; }
-  .sf-game .sf-readouts .sf-compass-target { padding-top: 0; font-size: 8px; }
+  .sf-game .sf-readouts .sf-compass-scale text { font-size: 11px; }
+  .sf-game .sf-readouts .sf-compass-scale .is-cardinal text { font-size: 11px; }
+  .sf-game .sf-readouts .sf-compass-target { padding-top: 0; font-size: 12px; }
   .sf-game .sf-stick-wrap { flex-direction: row; justify-content: center; gap: 10px; padding-top: 0; }
   .sf-game .sf-stick-wrap--right { flex-direction: row-reverse; }
   .sf-game .sf-stick-label {
     position: static;
-    width: 54px;
-    flex: 0 0 54px;
+    width: 82px;
+    flex: 0 0 82px;
     align-items: flex-start;
     text-align: left;
     transform: none;
   }
   .sf-game .sf-stick-label b,
-  .sf-game .sf-stick-label span { font-size: 8px; }
+  .sf-game .sf-stick-label span { font-size: 11px; }
   .sf-game .sf-instrument { width: 58px; }
   .sf-game .sf-tape,
   .sf-game .sf-tape-scale { width: 58px; height: 108px; }
@@ -311,10 +363,10 @@
   .sf-game .sf-fuel-instrument { right: 106px; bottom: calc(144px + env(safe-area-inset-bottom, 0px)); width: 122px; }
   .sf-game .sf-payload-value,
   .sf-game .sf-fuel-heading b { font-size: 13px; }
-  .sf-game .sf-payload-position { max-width: 160px; font-size: 8px; }
+  .sf-game .sf-payload-position { max-width: 160px; font-size: 11px; }
   .sf-game .sf-fuel-gauge { padding-block: 4px; }
   .sf-game .sf-fuel-gauge i { height: 6px; }
-  .sf-game .sf-message { top: 52%; }
+  .sf-game .sf-readouts .sf-message { margin-top: 3px; }
 }
 
 @media (prefers-reduced-transparency: reduce) {
@@ -368,5 +420,5 @@
   text-shadow: 0 1px 2px #06100e, 0 0 4px #06100e;
 }
 .sf-game .sf-flight-title strong { font-size: 13px; font-weight: 600; color: #e3e8da; }
-.sf-game .sf-flight-title .sf-phase { font-size: 8px; color: #d7c38e; font-weight: 650; }
-.sf-game .sf-flight-title > span:last-child { color: #c6cec1; font-size: 9px; }
+.sf-game .sf-flight-title .sf-phase { font-size: 11px; color: #d7c38e; font-weight: 650; }
+.sf-game .sf-flight-title > span:last-child { color: #c6cec1; font-size: 11px; }

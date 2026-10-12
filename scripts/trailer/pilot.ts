@@ -1,9 +1,10 @@
 import { shipLandingPoint } from '../../src/sim/shipLanding';
-import { bucketReadyForDeckRecovery } from '../../src/sim/bucket';
+import { BUCKET_BODY_HEIGHT_M, bucketReadyForDeckRecovery, bucketSurfaceHeight } from '../../src/sim/bucket';
 import { shouldObserveFire } from '../../src/sim/fireWork';
 import { getCampaign, getMission } from '../../src/content';
 import { createSim, distance2D, getObjectiveAction, stepSim } from '../../src/sim';
 import type { ExtendedSimState } from '../../src/sim/types';
+import { WaterPacketIdentityRecorder } from './packetReplay';
 import type { CampaignId, FlightCommand, Marker, SimState } from '../../src/types';
 
 const idle: FlightCommand = { yaw: 0, climb: 0, cyclicX: 0, cyclicY: 0, drop: false, fetch: false, faceObjective: false, returnHome: false, action: false };
@@ -41,10 +42,14 @@ export function recordSortie(campaignId: CampaignId, missionId: string) {
   const japanese = campaignId === 'jp_ketapang_2026_09';
   const deck = { ...mission.ship, ...shipLandingPoint(campaign, mission) };
   const shore = mission.shore ?? mission.ship;
+  const packetIds = new WaterPacketIdentityRecorder();
   const frames: ExtendedSimState[] = [structuredClone(state)];
+  const framePacketIds = [packetIds.idsFor(state.waterPackets)];
   let lastAction: string | null = null;
+  let takeoffHold: { x: number; z: number } | null = null;
   let maxTick = 60 * 400;
   for (let tick = 0; tick < maxTick && state.phase !== 'debrief' && state.phase !== 'failed'; tick++) {
+    const wasAttached = state.bucketAttached;
     const available = getObjectiveAction(state, campaign, mission);
     let cmd = { ...idle };
     if (state.precisionAction || state.fetching || state.rigProgress > 0 || state.dumping ||
@@ -75,9 +80,29 @@ export function recordSortie(campaignId: CampaignId, missionId: string) {
         state.bucketAttached ? 48 : 55);
       if (!available) lastAction = null;
     }
+    // Hold a newly attached sling vertically until its lower rim is clear of
+    // the deck or pad. The gameplay rope is long enough that the bucket can
+    // remain grounded while the aircraft rises; departing horizontally first
+    // would drag the load across the surface and spoil the trailer takeoff.
+    if (takeoffHold && state.bucketAttached) {
+      const clearance = state.bucket.y - BUCKET_BODY_HEIGHT_M -
+        bucketSurfaceHeight(campaign, mission, state.bucket.x, state.bucket.z);
+      if (clearance <= 0.6) {
+        const hover = flyTo(state, { ...takeoffHold, label: 'Vertical sling clearance' }, state.position.y + 100, 0);
+        cmd = { ...idle, ...hover, climb: 1, yaw: 0 };
+      } else {
+        takeoffHold = null;
+      }
+    }
     stepSim(state, cmd, campaign, mission);
-    if (tick % 2 === 1) frames.push(structuredClone(state));
+    if (!wasAttached && state.bucketAttached) {
+      takeoffHold = { x: state.position.x, z: state.position.z };
+    }
+    if (tick % 2 === 1) {
+      frames.push(structuredClone(state));
+      framePacketIds.push(packetIds.idsFor(state.waterPackets));
+    }
   }
   if (state.outcome !== 'success') throw new Error(`${missionId}: ${state.phase} at ${state.timeSec}s: ${state.message}`);
-  return { campaign, mission, frames, result: structuredClone(state) };
+  return { campaign, mission, frames, framePacketIds, result: structuredClone(state) };
 }

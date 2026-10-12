@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { campaigns } from '../content';
+import { getCampaignSites } from '../content/geographySites';
+import { renderedTerrainHeight } from '../sim/collision';
 import { createCoastalDetails } from './coastalDetails';
 import { createCoastalSampler } from './coastalSampling';
 import { createDistantScenery } from './distantScenery';
@@ -98,6 +100,62 @@ describe('coastal detail generation', () => {
       }
 
       const firstSnapshot = snapshot(first.details);
+      const sites = getCampaignSites(campaign).coastal;
+      expect(sites).toBeDefined();
+      if (sites) {
+        const mesh = first.scene.getObjectByName('Stilt fishing hut and jetty') as THREE.Mesh;
+        expect(mesh).toBeDefined();
+        first.scene.updateMatrixWorld(true);
+        const sampler = createCoastalSampler(campaign, mission);
+        for (const site of [sites.hut, sites.yard, sites.entrance]) {
+          const world = sampler.fromLocal(site.t, site.s);
+          expect(sampler.sample(world.x, world.z).isLand).toBe(true);
+        }
+        const pathRange = mesh.userData.coastalPathRange as {
+          vertexStart: number; vertexCount: number; indexStart: number; indexCount: number;
+        } | undefined;
+        expect(pathRange).toBeDefined();
+        if (!pathRange) return;
+        const positions = mesh.geometry.getAttribute('position');
+        const colors = mesh.geometry.getAttribute('color');
+        const index = mesh.geometry.index!;
+        expect(pathRange.vertexCount).toBeGreaterThan(20);
+        expect(pathRange.vertexCount % 2).toBe(0);
+        expect(pathRange.indexCount).toBe((pathRange.vertexCount / 2 - 1) * 6);
+        expect(colors.count).toBe(positions.count);
+        for (let section = 0; section < pathRange.vertexCount / 2 - 1; section++) {
+          const first = pathRange.vertexStart + section * 2;
+          const expected = [first, first + 2, first + 1, first + 1, first + 2, first + 3];
+          for (let corner = 0; corner < expected.length; corner++) {
+            expect(index.getX(pathRange.indexStart + section * 6 + corner)).toBe(expected[corner]);
+          }
+        }
+        const closestVertexDistance = (site: { t: number; s: number }) => {
+          const world = sampler.fromLocal(site.t, site.s);
+          let closest = Infinity;
+          for (let vertexIndex = pathRange.vertexStart; vertexIndex < pathRange.vertexStart + pathRange.vertexCount; vertexIndex++) {
+            const vertex = new THREE.Vector3().fromBufferAttribute(positions, vertexIndex);
+            mesh.localToWorld(vertex);
+            closest = Math.min(closest, Math.hypot(vertex.x - world.x, vertex.z - world.z));
+          }
+          return closest;
+        };
+        expect(closestVertexDistance(sites.entrance)).toBeLessThan(2);
+        expect(closestVertexDistance({ t: sites.hut.t + 5, s: sites.hut.s })).toBeLessThan(2);
+        for (let vertexIndex = pathRange.vertexStart; vertexIndex < pathRange.vertexStart + pathRange.vertexCount; vertexIndex++) {
+          const vertex = new THREE.Vector3().fromBufferAttribute(positions, vertexIndex);
+          mesh.localToWorld(vertex);
+          const terrain = renderedTerrainHeight(campaign, mission, vertex.x, vertex.z);
+          expect(terrain).not.toBeNull();
+          if (terrain !== null) expect(vertex.y - terrain).toBeCloseTo(.085, 3);
+        }
+        expect(first.details.stats.footpathSegments).toBeGreaterThan(10);
+        for (const site of [sites.hut, sites.yard]) {
+          const point = sampler.fromLocal(site.t, site.s);
+          expect(first.details.vegetationExclusionZones.some(zone => Math.hypot(zone.x - point.x, zone.z - point.z) < zone.radius + 1)).toBe(true);
+          expect(first.details.burnExclusionZones.some(zone => Math.hypot(zone.x - point.x, zone.z - point.z) < zone.radius + 1)).toBe(true);
+        }
+      }
       const second = generate(campaign, mission);
       try {
         expect(snapshot(second.details)).toEqual(firstSnapshot);

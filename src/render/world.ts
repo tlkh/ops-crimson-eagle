@@ -14,6 +14,9 @@ import { ExclusionLookup } from './exclusionLookup';
 import { createDistantScenery } from './distantScenery';
 import { getCampaignGeography } from '../content/geography';
 import { campaignTerrainFrame } from '../content/terrainFrame';
+import { createJapanAirbaseFrame } from '../content/airbaseLayout';
+import { getFireResponseExclusionZones } from '../sim/fireResponse';
+import { createFireResponse } from './fireResponse';
 import type { RenderQualityProfile } from './quality';
 import type { TextureAssets } from './textureAssets';
 import { createBurnField, isBurnProtectedAirport } from './burnField';
@@ -126,12 +129,18 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     river: { centerS: riverS, halfWidth: jp ? 68 : 48 },
     shore: mission.shore,
   });
-  const airbase = createJapanAirbase(scene, campaign, mission, {
-    toWorld: point => fromLocal(routeLength + point.z, -point.x),
+  const airbaseFrame = mission.shore ? createJapanAirbaseFrame(campaign, mission) : undefined;
+  const airbase = airbaseFrame ? createJapanAirbase(scene, campaign, mission, {
+    frame: airbaseFrame,
     terrainHeight,
     renderedTerrainHeight: (x, z) => renderedTerrainHeight(campaign, mission, x, z),
-  });
-  const burnExclusions = new ExclusionLookup([...landUse.burnExclusionZones, ...(airbase?.burnProtectedZones ?? [])]);
+  }) : null;
+  const coastalDetails = createCoastalDetails(scene, campaign, mission, coastalSampler, flightLegs);
+  const burnExclusions = new ExclusionLookup([
+    ...landUse.burnExclusionZones,
+    ...coastalDetails.burnExclusionZones,
+    ...(airbase?.burnProtectedZones ?? []),
+  ]);
   // One immutable footprint aligns the terrain, damaged trees and active edge.
   // Water, support facilities, settlements and crops stay protected; roads remain burnable.
   const burnField = createBurnField(mission, { eligible: (x, z) => {
@@ -144,8 +153,10 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   } });
   landUse.applyBurnField(burnField);
   airbase?.applyBurnField(burnField);
-  const groundSurface = createGroundSurface(options.textureAssets, burnField);
+  const groundSurface = createGroundSurface(options.textureAssets, burnField, () => water.invalidateReflections());
   const land = new THREE.Mesh(terrain, groundSurface.material); land.receiveShadow = true; scene.add(land);
+  // Reserve every sector's response site so woodland remains identical between sorties.
+  const responseZones = campaign.missions.flatMap(item => getFireResponseExclusionZones(campaign, item));
   const vegetation = createVegetation(scene, campaign, mission, {
     fromLocal,
     local,
@@ -154,11 +165,11 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     isLake,
     riverS,
     flightLegs,
-    settlementExclusions: [],
-    farmExclusions: [...landUse.exclusionZones, ...(airbase?.vegetationExclusionZones ?? []), ...(airbase?.structureExclusionZones ?? [])]
+    settlementExclusions: responseZones,
+    farmExclusions: [...landUse.exclusionZones, ...coastalDetails.vegetationExclusionZones, ...(airbase?.vegetationExclusionZones ?? []), ...(airbase?.structureExclusionZones ?? [])]
       .map(zone => ({ center: { x: zone.x, z: zone.z }, radius: zone.radius })),
     roadsideRoads: [...getCampaignGeography(campaign).roads, ...(airbase?.roads ?? [])],
-    roadsideExclusions: [...landUse.burnExclusionZones, ...(airbase?.structureExclusionZones ?? [])]
+    roadsideExclusions: [...landUse.burnExclusionZones, ...coastalDetails.vegetationExclusionZones, ...(airbase?.structureExclusionZones ?? [])]
       .map(zone => ({ center: { x: zone.x, z: zone.z }, radius: zone.radius })),
     burnField,
     visualTier: options.preview || window.matchMedia('(max-width: 768px), (pointer: coarse)').matches ? 'reduced' : 'full',
@@ -167,7 +178,7 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   const solidStructures: Array<{ object: THREE.Object3D; label: string }> = [];
   if (mission.shore) {
     // Representative apron at the authored pad; dimensions informed by DGCA facilities listing.
-    const apron = new THREE.Group(); apron.position.set(mission.shore.x, 0, mission.shore.z); apron.rotation.y = Math.atan2(ux, uz);
+    const apron = new THREE.Group(); apron.position.set(mission.shore.x, 0, mission.shore.z); apron.rotation.y = airbaseFrame!.heading;
     const concrete=material('#a5aaa3'),asphalt=material('#515957'),stripe=material('#d7d6c5'),glass=material('#586e6e',.25);
     block(apron, [60, .06, 30], [0, -.05, 0], concrete);
     block(apron, [224,.06,51],[105,-.05,74],asphalt);
@@ -199,7 +210,6 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
     const signCanvas=document.createElement('canvas');signCanvas.width=512;signCanvas.height=64;const signContext=signCanvas.getContext('2d')!;signContext.fillStyle='#d3d2b9';signContext.fillRect(0,0,512,64);signContext.fillStyle='#354b45';signContext.font='bold 30px sans-serif';signContext.textAlign='center';signContext.fillText('RAHADI OESMAN',256,43);const signTexture=new THREE.CanvasTexture(signCanvas);signTexture.colorSpace=THREE.SRGBColorSpace;const sign=new THREE.Mesh(new THREE.PlaneGeometry(24,3),new THREE.MeshBasicMaterial({map:signTexture}));sign.position.set(85,6.8,112.3);sign.rotation.y=Math.PI;apron.add(sign);
     scene.add(apron);
   }
-  const coastalDetails = createCoastalDetails(scene, campaign, mission, coastalSampler, flightLegs);
   const distantScenery = createDistantScenery(scene, campaign, mission, { preview: options.preview });
   const treeColliders: TreeCollider[] = [
     ...vegetation.treeColliders,
@@ -222,21 +232,25 @@ export function createWorld(scene: THREE.Scene, campaign: Campaign, mission: Mis
   });
   structureColliders.push(...landUse.structureColliders, ...coastalDetails.structureColliders, ...(airbase?.structureColliders ?? []));
   setStructureColliders(mission, structureColliders);
+  const fireResponse = createFireResponse(scene, campaign, mission, { preview: options.preview });
   let detail: 'high' | 'low' = 'high';
   return {
+    invalidateReflections() { water.invalidateReflections(); },
     setQuality(profile: RenderQualityProfile) {
       detail = profile.detail;
       water.setQuality({ reflectionSize: profile.reflectionSize, reflectionIntervalMs: profile.reflectionIntervalMs, reflections: profile.reflections && !options.preview });
       atmosphere.setQuality(profile.detail);
+      fireResponse.setQuality(profile);
     },
-    update(time: number, camera?: THREE.Vector3, state?: SimState, nightStrength = 0) {
+    update(time: number, camera?: THREE.Vector3, state?: SimState, nightStrength = 0, captureClockMs?: number) {
       groundSurface.update(state);
-      water.update(time, state);
+      water.update(time, state, captureClockMs);
       atmosphere.update(time, camera, state);
       coastalDetails.update(time, nightStrength);
+      if (state) fireResponse.update(state);
       if (camera) vegetation.update(camera, detail);
     },
-    dispose() { distantScenery.dispose(); coastalDetails.dispose(); airbase?.dispose(); landUse.dispose(); vegetation.dispose(); water.dispose(); groundSurface.dispose(); },
+    dispose() { fireResponse.dispose(); distantScenery.dispose(); coastalDetails.dispose(); airbase?.dispose(); landUse.dispose(); vegetation.dispose(); water.dispose(); groundSurface.dispose(); },
     terrainHeight, burnField, lake, shore, boats: coastalDetails.boats, coastalStats: coastalDetails.stats,
     vegetationStats: vegetation.stats, landUseStats: landUse.stats,
     coastalLightingAnchor: coastalDetails.lightingAnchor, route: { ux, uz, sx, sz, routeLength },

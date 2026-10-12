@@ -2,7 +2,7 @@ import type { Campaign, Mission, SimState, Vec3 } from '../types';
 import { renderedTerrainHeight } from './collision';
 import { isWithinLakeOutline } from './lakeShape';
 import { shipToLocal } from './shipLanding';
-import { campaignTerrainAnchor } from '../content/terrainFrame';
+import { createJapanAirbaseFrame } from '../content/airbaseLayout';
 
 /** `state.bucket` is the center of the open rim, in world coordinates. */
 export const BUCKET_BODY_HEIGHT_M = 1.48;
@@ -71,12 +71,7 @@ export function bucketSurfaceHeight(campaign: Campaign, mission: Mission, x: num
   if (isWithinLakeOutline(campaign.id, mission.lake, { x, z })) return LAKE_SURFACE_M;
   if (mission.shore) {
     // Match the rotated handling pad, apron, runway and taxiways in world.ts.
-    const anchor = campaignTerrainAnchor(campaign);
-    const routeX = mission.shore.x - anchor.x, routeZ = mission.shore.z - anchor.z;
-    const length = Math.max(1, Math.hypot(routeX, routeZ));
-    const dx = x - mission.shore.x, dz = z - mission.shore.z;
-    const px = (dx * routeZ - dz * routeX) / length;
-    const pz = (dx * routeX + dz * routeZ) / length;
+    const { x: px, z: pz } = createJapanAirbaseFrame(campaign, mission).toLocal({ x, z });
     if ((Math.abs(px) <= 30 && Math.abs(pz) <= 15) ||
       (Math.abs(px - 105) <= 112 && Math.abs(pz - 74) <= 25.5) ||
       (Math.abs(px - 235) <= 15 && Math.abs(pz - 380) <= 500) ||

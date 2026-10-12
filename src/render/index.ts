@@ -139,6 +139,7 @@ export function createScene(container: HTMLElement, options: CreateSceneOptions 
     cpuSubmissionMs: number; gpuMs: number | null; estimatedSceneBytes: number; renderTargetBytes: number;
     frameIntervalP50Ms: number; frameIntervalP95Ms: number; samples: number; mode: GraphicsMode; qualityLevel: number;
     targetFps: number; pixelRatio: number; width: number; height: number;
+    woodyPlants: number; roadLengthM: number;
     burnedTrees: number; charredTrees: number; damageTriangles: number };
 } {
   const externalClock = options.externalClock ?? false;
@@ -227,6 +228,7 @@ export function createScene(container: HTMLElement, options: CreateSceneOptions 
     cinematic.resize(container.clientWidth, container.clientHeight);
     camera.aspect = container.clientWidth / container.clientHeight;
     camera.updateProjectionMatrix();
+    world?.invalidateReflections();
     renderDirty = true;
   };
   const applyQuality = () => {
@@ -346,7 +348,7 @@ export function createScene(container: HTMLElement, options: CreateSceneOptions 
       cameraVelocity.copy(camera.position).sub(cameraPrevious).multiplyScalar(simulationDelta > 0 ? 1 / simulationDelta : 0);
       nightLighting?.update(latestState, nightStrength, daylight.sunIntensity);
       proximityParticles?.update(latestState, camera);
-      world.update(t, camera.position, latestState, nightStrength);
+      world.update(t, camera.position, latestState, nightStrength, renderTime * 1000);
     }
     if (latestState) cinematic.render(scene, camera, {
       enabled: effectsEnabled && profile.cinematic, reducedMotion: reducedMotion.matches, paused: effectsPaused,
@@ -453,6 +455,8 @@ export function createScene(container: HTMLElement, options: CreateSceneOptions 
       burnedTrees: world?.vegetationStats.burnedTrees ?? 0,
       charredTrees: world?.vegetationStats.charredTrees ?? 0,
       damageTriangles: world?.vegetationStats.damageTriangles ?? 0,
+      woodyPlants: world?.vegetationStats.woodyPlants ?? 0,
+      roadLengthM: (world?.landUseStats.roadLengthM ?? 0) + (world?.landUseStats.trackLengthM ?? 0),
     }; },
     renderFrame,
     renderScheduledFrame,

@@ -79,7 +79,7 @@ function makeFallbackAtlas(): THREE.DataTexture {
   return texture;
 }
 
-export function createGroundSurface(textureAssets?: GroundTextureAssets, burnField?: BurnField): GroundSurface {
+export function createGroundSurface(textureAssets?: GroundTextureAssets, burnField?: BurnField, onVisualChange?: () => void): GroundSurface {
   const burnTexture = makeBurnTexture(burnField);
   const fallbackAtlas = makeFallbackAtlas();
   let disposed = false;
@@ -102,6 +102,7 @@ export function createGroundSurface(textureAssets?: GroundTextureAssets, burnFie
           context.drawImage(loaded.image, 0, 0, ATLAS_WIDTH, TILE_CELL);
           fallbackAtlas.image.data.set(context.getImageData(0, 0, ATLAS_WIDTH, TILE_CELL).data);
           fallbackAtlas.needsUpdate = true;
+          onVisualChange?.();
         }
       }
       loaded.dispose();
@@ -222,8 +223,11 @@ export function createGroundSurface(textureAssets?: GroundTextureAssets, burnFie
         vec3 ashTint = mix(vec3(.30, .285, .255), vec3(.49, .445, .38), burnAshMottle);
         vec3 charcoalTint = mix(vec3(.018, .017, .015), vec3(.048, .043, .036), burnMottle);
         charcoalTint = mix(charcoalTint, vec3(.008, .008, .007), burnCharImprint);
-        float macroBreakup = (broadPatch - .5) * .20 + (mediumPatch - .5) * .12;
-        float albedoVariation = (groundSample.r - .5) * .34;
+        // Give the working-altitude foreground more surface definition while
+        // keeping distant habitat quiet. Burn layers below retain their own
+        // immutable coverage and colours rather than inheriting extra noise.
+        float macroBreakup = (broadPatch - .5) * .20 + (mediumPatch - .5) * (.12 + .12 * groundDetailFade);
+        float albedoVariation = (groundSample.r - .5) * .48;
         diffuseColor.rgb *= mix(vec3(1.0), habitatTint, .72);
         diffuseColor.rgb *= 1.0 + macroBreakup;
         diffuseColor.rgb *= 1.0 + albedoVariation * groundDetailFade;
@@ -233,7 +237,7 @@ export function createGroundSurface(textureAssets?: GroundTextureAssets, burnFie
         diffuseColor.rgb *= 1.0 - groundWetness * .24;
         float burnRelief = (burnAshLayer * (.004 + .003 * burnAshMottle)
           - burnCharCore * (.004 + .003 * burnMottle) + burnCharImprint * .001) * burnDetailFade;
-        float groundBumpHeight = (groundSample.g - .5) * .22 * groundDetailFade + burnRelief;`)
+        float groundBumpHeight = (groundSample.g - .5) * .26 * groundDetailFade + burnRelief;`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         float grassRoughness = .70 + grassSample.b * .28;
         float peatRoughness = .62 + peatSample.b * .32;
@@ -251,7 +255,7 @@ export function createGroundSurface(textureAssets?: GroundTextureAssets, burnFie
         vec3 groundGradient = sign(groundDet) * (dFdx(groundBumpHeight) * groundR1 + dFdy(groundBumpHeight) * groundR2);
         normal = normalize(abs(groundDet) * normal - groundGradient);`);
   };
-  material.customProgramCacheKey = () => 'ground-surface-atlas-burn-v3';
+  material.customProgramCacheKey = () => 'ground-surface-atlas-burn-v4';
   if (lease) {
     void lease.ready.then(readyAtlas => {
       if (disposed) return;
@@ -261,6 +265,7 @@ export function createGroundSurface(textureAssets?: GroundTextureAssets, burnFie
       }
       atlas = readyAtlas;
       for (const shader of compiledShaders) shader.uniforms.groundAtlas.value = readyAtlas;
+      onVisualChange?.();
     });
   }
   return {

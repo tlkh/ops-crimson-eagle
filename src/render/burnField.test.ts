@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { campaigns } from '../content';
+import { createJapanAirbaseFrame } from '../content/airbaseLayout';
 import { createBurnField, isBurnProtectedAirport } from './burnField';
 import { selectFireSites } from './fire';
 
@@ -42,11 +43,12 @@ describe('authored burn history', () => {
   it('protects actual airport surfaces without erasing nearby playable fire sectors', () => {
     for (const mission of campaigns[1].missions) {
       const shore = mission.shore!;
+      const frame = createJapanAirbaseFrame(campaigns[1], mission);
       expect(isBurnProtectedAirport(mission, shore.x, shore.z)).toBe(true);
-      const length = Math.hypot(shore.x - mission.ship.x, shore.z - mission.ship.z);
-      const ux = (shore.x - mission.ship.x) / length, uz = (shore.z - mission.ship.z) / length;
-      expect(isBurnProtectedAirport(mission, shore.x + uz * 235 + ux * 380,
-        shore.z - ux * 235 + uz * 380)).toBe(true);
+      const runwayCenter = frame.toWorld({ x: 235, z: 380 });
+      expect(isBurnProtectedAirport(mission, runwayCenter.x, runwayCenter.z)).toBe(true);
+      const approach = frame.toWorld({ x: 235, z: -400 });
+      expect(isBurnProtectedAirport(mission, approach.x, approach.z)).toBe(false);
       const field = createBurnField(mission, { eligible: (x, z) => !isBurnProtectedAirport(mission, x, z) });
       // JP-05/06 are inside the 900m tree-clearance circle; fire must stay visible.
       const sources = selectFireSites(mission, field, 40);

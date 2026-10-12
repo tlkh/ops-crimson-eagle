@@ -7,6 +7,8 @@ import { BUCKET_BODY_HEIGHT_M, BUCKET_FLOAT_RIM_M, BUCKET_HOOK_OFFSET_M, BUCKET_
 import { shipLandingLocalZ, shipLandingPoint, shipToLocal, shipToWorld } from './shipLanding';
 import { WORLD_REVISION } from '../worldRevision';
 import { isWithinLakeOutline } from './lakeShape';
+import { fireResponseEngineColliders } from './fireResponse';
+import { shipRadomePlacements } from '../content/shipDetails';
 
 export type { ExtendedSimState, WaterPacket } from './types';
 
@@ -877,7 +879,10 @@ function shipCollision(state: ExtendedSimState, campaign: Campaign, mission: Mis
       { x: beam * .27 - 1, z: station(.445), hw: 3.5, hl: 1.5, top: 24.15 },
       { x: beam * .27, z: station(.325), hw: 2.5, hl: 3, top: 2 },
       { x: beam * .27, z: station(.59), hw: 1.4, hl: 2.2, top: 6.45 },
-      { x: beam * .27, z: station(.545), hw: 3.7, hl: 4, top: 10 }]
+      { x: beam * .27, z: station(.545), hw: 3.7, hl: 4, top: 10 },
+      ...shipRadomePlacements(campaign).map(dome => ({
+        x: dome.x, z: dome.z, hw: dome.radius, hl: dome.radius, top: dome.y + dome.radius,
+      }))]
     : [{ x: 0, z: station(.375), hw: beam * .63 / 2, hl: 16.5, top: 5.05 },
       { x: 0, z: station(.292), hw: beam * .44, hl: 8.5, top: 9.625 },
       { x: 0, z: -40.5, hw: beam * .61 / 2, hl: 6, top: 3.75 },
@@ -998,6 +1003,31 @@ function checkCollision(state: ExtendedSimState, campaign: Campaign, mission: Mi
     if (bodyHit || rotorHitsBox(state, structure)) {
       return crash(state, `${structure.label} impact`);
     }
+  }
+  for (const engine of fireResponseEngineColliders(campaign, mission, state.timeSec)) {
+    const dx = state.position.x - engine.x, dz = state.position.z - engine.z;
+    const cos = Math.cos(engine.heading), sin = Math.sin(engine.heading);
+    const localX = dx * cos - dz * sin;
+    const localZ = dx * sin + dz * cos;
+    const deltaHeading = state.heading - engine.heading;
+    const headingCos = Math.abs(Math.cos(deltaHeading)), headingSin = Math.abs(Math.sin(deltaHeading));
+    const fuselageHalfWidth = 2.6 * headingCos + 8.2 * headingSin;
+    const fuselageHalfLength = 2.6 * headingSin + 8.2 * headingCos;
+    const bodyHit = Math.abs(localX) <= engine.halfWidth + fuselageHalfWidth &&
+      Math.abs(localZ) <= engine.halfLength + fuselageHalfLength &&
+      state.position.y - 1.5 <= engine.top && state.position.y + 3.2 >= engine.bottom;
+    let rotorHit = false;
+    for (const [rotorZ, rotorOffsetY] of [[-5.7, 2.73], [6.15, 3.18]]) {
+      const rx = state.position.x + Math.sin(state.heading) * rotorZ - engine.x;
+      const rz = state.position.z + Math.cos(state.heading) * rotorZ - engine.z;
+      const engineX = rx * cos - rz * sin;
+      const engineZ = rx * sin + rz * cos;
+      const dxToBody = Math.max(0, Math.abs(engineX) - engine.halfWidth);
+      const dzToBody = Math.max(0, Math.abs(engineZ) - engine.halfLength);
+      const rotorY = state.position.y + rotorOffsetY * Math.cos(state.bank) * Math.cos(state.pitch) + rotorZ * Math.sin(state.pitch);
+      if (Math.hypot(dxToBody, dzToBody) <= 9.15 && rotorY >= engine.bottom && rotorY <= engine.top) rotorHit = true;
+    }
+    if (bodyHit || rotorHit) return crash(state, 'Fire engine impact');
   }
   return false;
 }

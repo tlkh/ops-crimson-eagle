@@ -4,6 +4,17 @@ import { createSim } from './index';
 import { BUCKET_BODY_HEIGHT_M, BUCKET_FLOAT_RIM_M, bucketCrossesShipSide, bucketMinimumRimHeight, bucketReadyForDeckRecovery, bucketSurfaceHeight, isBucketFootprintOverDeck, isBucketTouchingLake, LAKE_SURFACE_M, SHIP_DECK_SURFACE_M } from './bucket';
 import { shipLandingLocalZ, shipLandingPoint, shipToWorld } from './shipLanding';
 import { lakeRadiusAtAngle } from './lakeShape';
+import { createJapanAirbaseFrame } from '../content/airbaseLayout';
+
+it('uses the rotated airport surfaces for bucket ground contact', () => {
+  const campaign = campaigns[1], mission = campaign.missions[0];
+  const frame = createJapanAirbaseFrame(campaign, mission);
+  for (const point of [{ x: 0, z: 0 }, { x: 105, z: 74 }, { x: 235, z: -110 }, { x: 235, z: 870 }, { x: 180, z: 740 }]) {
+    const world = frame.toWorld(point);
+    expect(bucketSurfaceHeight(campaign, mission, world.x, world.z)).toBe(0);
+    expect(bucketMinimumRimHeight(campaign, mission, world.x, world.z)).toBeCloseTo(BUCKET_BODY_HEIGHT_M);
+  }
+});
 
 describe('bucket deck recovery readiness', () => {
   it('requires the whole attached bucket to be over the deck and clear of its surface', () => {

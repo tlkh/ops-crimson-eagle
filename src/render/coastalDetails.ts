@@ -5,6 +5,8 @@ import type { StructureCollider, TreeCollider } from '../sim/collision';
 import { renderedTerrainHeight } from '../sim/collision';
 import { SEA_SURFACE_Y, type CoastalSampler } from './coastalSampling';
 import { campaignTerrainAnchor } from '../content/terrainFrame';
+import { getCampaignSites } from '../content/geographySites';
+import type { VegetationExclusionZone } from './landUse';
 
 type Point = { x: number; z: number };
 type Leg = [Point, Point];
@@ -12,6 +14,8 @@ type Leg = [Point, Point];
 export interface CoastalDetailsResult {
   treeColliders: TreeCollider[];
   structureColliders: StructureCollider[];
+  vegetationExclusionZones: VegetationExclusionZone[];
+  burnExclusionZones: VegetationExclusionZone[];
   boats: THREE.Group;
   lightingAnchor?: { x: number; y: number; z: number };
   stats: { coastalDrawCalls: number; coastalTriangles: number; boatCount: number; mangroveCount: number; mangrovePocketCount: number; grassCount: number; footpathSegments: number; coastalYardCount: number };
@@ -67,6 +71,74 @@ function merge(parts: THREE.BufferGeometry[]) {
   for (const part of parts) part.dispose();
   geometry.computeVertexNormals();
   return geometry;
+}
+
+function createTerrainConformingRibbon(
+  waypoints: readonly Point[],
+  groundAt: (x: number, z: number) => number | null,
+  halfWidth = 1.175,
+  lift = .085,
+) {
+  const centerline: Point[] = [];
+  for (let legIndex = 1; legIndex < waypoints.length; legIndex++) {
+    const start = waypoints[legIndex - 1], end = waypoints[legIndex];
+    const dx = end.x - start.x, dz = end.z - start.z;
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 3));
+    if (legIndex === 1) centerline.push(start);
+    for (let step = 1; step <= steps; step++) {
+      const fraction = step / steps;
+      centerline.push({ x: start.x + dx * fraction, z: start.z + dz * fraction });
+    }
+  }
+
+  const positions: number[] = [];
+  const colors: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  const edgeSamples: Point[] = [];
+  const normals = centerline.slice(0, -1).map((point, index) => {
+    const next = centerline[index + 1];
+    const dx = next.x - point.x, dz = next.z - point.z;
+    const length = Math.max(.001, Math.hypot(dx, dz));
+    return { x: -dz / length, z: dx / length };
+  });
+  for (let index = 0; index < centerline.length; index++) {
+    const center = centerline[index];
+    const before = normals[Math.max(0, index - 1)] ?? normals[0] ?? { x: 0, z: 1 };
+    const after = normals[Math.min(index, normals.length - 1)] ?? before;
+    let mx = before.x + after.x, mz = before.z + after.z;
+    let miterLength = Math.hypot(mx, mz);
+    if (miterLength < .001) {
+      mx = after.x; mz = after.z; miterLength = 1;
+    }
+    mx /= miterLength; mz /= miterLength;
+    const projection = Math.max(.5, Math.abs(mx * after.x + mz * after.z));
+    const offset = Math.min(halfWidth / projection, halfWidth * 2.5);
+    const left = { x: center.x + mx * offset, z: center.z + mz * offset };
+    const right = { x: center.x - mx * offset, z: center.z - mz * offset };
+    const leftGround = groundAt(left.x, left.z), rightGround = groundAt(right.x, right.z);
+    if (leftGround === null || rightGround === null) return { geometry: null, centerline, edgeSamples: [] as Point[] };
+    edgeSamples.push(left, right);
+    positions.push(left.x, leftGround + lift, left.z, right.x, rightGround + lift, right.z);
+
+    // Low-frequency packed-earth variation keeps the ribbon natural without the
+    // abrupt color bands created by separate alternating box segments.
+    const tint = new THREE.Color('#8d8267').offsetHSL(0, 0, Math.sin(index * .17) * .012);
+    colors.push(tint.r, tint.g, tint.b, tint.r, tint.g, tint.b);
+    uvs.push(index * .15, 0, index * .15, 1);
+    if (index > 0) {
+      const previous = (index - 1) * 2;
+      indices.push(previous, previous + 2, previous + 1, previous + 1, previous + 2, previous + 3);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return { geometry, centerline, edgeSamples };
 }
 
 function colliderFor(object: THREE.Object3D, label: string): StructureCollider {
@@ -160,6 +232,9 @@ export function createCoastalDetails(
   root.name = 'Coastal details';
   const treeColliders: TreeCollider[] = [];
   const structureColliders: StructureCollider[] = [];
+  const vegetationExclusionZones: VegetationExclusionZone[] = [];
+  const burnExclusionZones: VegetationExclusionZone[] = [];
+  const campaignSites = getCampaignSites(campaign);
   const coastGround = (t: number, s: number) => {
     const p = sampler.fromLocal(t, s);
     return { ...p, ground: renderedTerrainHeight(campaign, mission, p.x, p.z) };
@@ -170,10 +245,6 @@ export function createCoastalDetails(
     (mission.shore !== undefined && distance(p, mission.shore) < 900 + margin) || distance(p, mission.ship) < 480;
   const safePoint = (p: Point, routeMargin: number) => routeClearance(p) > routeMargin && !isProtected(p);
   const coastalCandidateS = [-520, 620, -1150, 1350, -1750, 1950, -2350, 2650, -3050, 3350, -3650, 3950, -4300, 4300];
-  const safeStructureS = coastalCandidateS.filter(s => {
-    const p = sampler.fromLocal(sampler.coastAt(s) + 47, s);
-    return safePoint(p, 420) && Math.abs(s + 850) > 240;
-  });
   const safeBoatS = coastalCandidateS.filter(s => {
     const p = sampler.fromLocal(sampler.coastAt(s) - 110, s);
     return safePoint(p, 260) && Math.abs(s + 850) > 180 && distance(p, mission.lake) > mission.lake.radius + 300;
@@ -368,14 +439,16 @@ export function createCoastalDetails(
 
   // One raised fishing hut and a short, stepped jetty are omitted if a campaign route or
   // protected objective occupies every candidate cove.
+  const coastalSite = campaignSites.coastal;
   let structureAnchor: { s: number; t: number; x: number; z: number } | undefined;
-  for (const s of safeStructureS) {
-    const t = sampler.coastAt(s) + 47, p = sampler.fromLocal(t, s);
-    if (safePoint(p, 420)) { structureAnchor = { s, t, ...p }; break; }
+  if (coastalSite) {
+    const p = sampler.fromLocal(coastalSite.hut.t, coastalSite.hut.s);
+    structureAnchor = { s: coastalSite.hut.s, t: coastalSite.hut.t, ...p };
   }
   let lampMesh: THREE.Mesh | undefined;
   let lampMaterial: THREE.MeshStandardMaterial | undefined;
   let lightingAnchor: { x: number; y: number; z: number } | undefined;
+  let accessPathRange: { vertexStart: number; vertexCount: number; indexStart: number; indexCount: number } | undefined;
   let footpathSegments = 0;
   let coastalYardCount = 0;
   if (structureAnchor) {
@@ -444,6 +517,12 @@ export function createCoastalDetails(
     const lampDeck = Math.max(SEA_SURFACE_Y + 1.15, lampGround + .72);
     for (const x of [-3.2, 3.2]) addBox(parts, [.18, 2.1, .18], [x, lampDeck + 1.05, lampD - 47], '#584a36');
 
+    // A short stair joins the raised hut floor to the landward service track.
+    for (let step = 0; step < 5; step++) {
+      const height = (step + 1) * (floor - ground) / 5;
+      addBox(parts, [2.2, height, 1.2], [0, ground + height * .5, 5.6 - step * .85], '#79694e');
+    }
+
     // Preserve a tight collision box for the hut and pier before adding the inland yard to the
     // same merged draw call. The path is ground-level dressing; the shed and fence get their own
     // world-aligned structure bounds below.
@@ -458,6 +537,10 @@ export function createCoastalDetails(
 
     const localPoint = (x: number, z: number) => sampler.fromLocal(hutT + z, s - x);
     const localGround = (x: number, z: number) => coastGround(hutT + z, s - x).ground;
+    const exclusionAt = (x: number, z: number, radius: number): VegetationExclusionZone => {
+      const point = localPoint(x, z);
+      return { x: point.x, z: point.z, radius };
+    };
     const footprintIsSafe = (x: number, z: number, halfX: number, halfZ: number) =>
       [[x, z], [x - halfX, z - halfZ], [x - halfX, z + halfZ], [x + halfX, z - halfZ], [x + halfX, z + halfZ]]
         .every(([localX, localZ]) => {
@@ -478,13 +561,20 @@ export function createCoastalDetails(
     };
 
     // A thin packed-earth track leaves the hut for a little inland work yard. Sample each section
-    // from the rendered terrain and break the line around the natural scrub rather than paving it.
-    const yardCandidates: Array<[number, number]> = [[-35, 58], [36, 66], [-42, 104], [43, 112], [-18, 128]];
-    const yard = yardCandidates.find(([x, z]) => footprintIsSafe(x, z, 20, 22));
-    if (yard) {
-      const [yardX, yardZ] = yard;
-      const yardGround = localGround(yardX, yardZ);
+    // from the rendered terrain. The shared entrance runs through an open gate in the yard fence.
+    if (coastalSite) {
+      const yardX = s - coastalSite.yard.s;
+      const yardZ = coastalSite.yard.t - hutT;
+      const entranceX = s - coastalSite.entrance.s;
+      const entranceZ = coastalSite.entrance.t - hutT;
+      const accessIsSafe = footprintIsSafe(yardX, yardZ, 20, 22)
+        && footprintIsSafe(entranceX, entranceZ, 4, 4);
+      // Shared sites are checked against every sortie; retain this local terrain
+      // and route guard in case a campaign layout is edited independently.
+      const yardGround = accessIsSafe ? localGround(yardX, yardZ) : null;
       if (yardGround !== null) {
+        vegetationExclusionZones.push(exclusionAt(yardX, yardZ, 25));
+        burnExclusionZones.push(exclusionAt(yardX, yardZ, 13));
         addBox(parts, [37, .055, 42], [yardX, yardGround + .025, yardZ], '#81795f');
         const shedX = yardX, shedZ = yardZ + 1, shedGround = localGround(shedX, shedZ);
         if (shedGround !== null) {
@@ -509,40 +599,66 @@ export function createCoastalDetails(
           coastalYardCount++;
         }
 
-        const pathLength = Math.max(1, yardZ - 17), segments = Math.ceil(pathLength / 5.5);
-        for (let segment = 0; segment < segments; segment++) {
-          const progress = (segment + .5) / segments;
-          const z = 17 + progress * pathLength;
-          const x = yardX * progress + Math.sin(progress * Math.PI * 2.1) * 4.2;
-          const point = localPoint(x, z), ground = localGround(x, z);
-          if (ground === null || !safePoint(point, 390)) continue;
-          addBox(parts, [2.35, .065, pathLength / segments + .35], [x, ground + .035, z], segment % 3 === 0 ? '#93876a' : '#897f64');
-          footpathSegments++;
+        const accessPath: Point[] = [
+          { x: 0, z: 5 }, { x: yardX, z: yardZ }, { x: entranceX, z: entranceZ },
+        ];
+        const ribbon = createTerrainConformingRibbon(accessPath, localGround);
+        if (ribbon.geometry) {
+          const ribbonIsSafe = ribbon.centerline.every(point => safePoint(localPoint(point.x, point.z), 390))
+            && ribbon.edgeSamples.every(point => safePoint(localPoint(point.x, point.z), 390));
+          if (ribbonIsSafe) {
+            const vertexStart = parts.reduce((sum, part) => sum + part.getAttribute('position').count, 0);
+            const indexStart = parts.reduce((sum, part) => sum + (part.index?.count ?? 0), 0);
+            parts.push(ribbon.geometry);
+            accessPathRange = {
+              vertexStart,
+              vertexCount: ribbon.geometry.getAttribute('position').count,
+              indexStart,
+              indexCount: ribbon.geometry.index?.count ?? 0,
+            };
+            footpathSegments = ribbon.centerline.length - 1;
+            for (let index = 0; index < ribbon.centerline.length; index += 2) {
+              const point = localPoint(ribbon.centerline[index].x, ribbon.centerline[index].z);
+              vegetationExclusionZones.push({ x: point.x, z: point.z, radius: 2.6 });
+            }
+          } else {
+            ribbon.geometry.dispose();
+          }
         }
 
-        // Three sides of a low, open fishing-yard fence keep the path mouth clear. A single
-        // conservative bound covers its connected rails and posts for aircraft collision checks.
+        // Three low fence sides enclose the yard. The inland side has a clear
+        // vehicle and footpath opening aligned with the shared road entrance.
         if (footprintIsSafe(yardX, yardZ, 20, 22)) {
           const fenceBottom = yardGround, fenceTop = yardGround + 1.55;
           for (const sideX of [-18, 18]) {
             for (const postZ of [-10, 0, 10]) addBox(parts, [.2, 1.55, .2], [yardX + sideX, fenceBottom + .78, yardZ + postZ], '#5c503d');
             addBox(parts, [.16, .14, 21], [yardX + sideX, fenceBottom + 1.05, yardZ], '#6d5b43');
             addBox(parts, [.16, .14, 21], [yardX + sideX, fenceBottom + .48, yardZ], '#6d5b43');
+            structureColliders.push(localCollider(yardX + sideX, yardZ + 5, .2, 10.5, fenceBottom, fenceTop, 'coastal fishing-yard fence'));
+            coastalYardCount++;
           }
-          for (const postX of [-9, 0, 9]) addBox(parts, [.2, 1.55, .2], [yardX + postX, fenceBottom + .78, yardZ + 20], '#5c503d');
-          addBox(parts, [38, .14, .16], [yardX, fenceBottom + 1.05, yardZ + 20], '#6d5b43');
-          addBox(parts, [38, .14, .16], [yardX, fenceBottom + .48, yardZ + 20], '#6d5b43');
-          structureColliders.push(localCollider(yardX, yardZ + 5, 19.2, 15.8, fenceBottom, fenceTop, 'coastal fishing-yard fence'));
-          coastalYardCount++;
+          for (const offsetX of [-18, -7, 7, 18]) addBox(parts, [.2, 1.55, .2], [yardX + offsetX, fenceBottom + .78, yardZ + 20], '#5c503d');
+          for (const center of [yardX - 12.5, yardX + 12.5]) {
+            const width = 11;
+            addBox(parts, [width, .14, .16], [center, fenceBottom + 1.05, yardZ + 20], '#6d5b43');
+            addBox(parts, [width, .14, .16], [center, fenceBottom + .48, yardZ + 20], '#6d5b43');
+            structureColliders.push(localCollider(center, yardZ + 20, width / 2, .16, fenceBottom, fenceTop, 'coastal fishing-yard fence'));
+            coastalYardCount++;
+          }
         }
       }
     }
+
+    const hutWorld = sampler.fromLocal(hutT, s);
+    vegetationExclusionZones.push({ x: hutWorld.x, z: hutWorld.z, radius: 17 });
+    burnExclusionZones.push({ x: hutWorld.x, z: hutWorld.z, radius: 11 });
 
     const structureGeometry = merge(parts);
     const structureMesh = new THREE.Mesh(structureGeometry, new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: .96 }));
     structureMesh.position.set(structureAnchor.x, 0, structureAnchor.z);
     structureMesh.rotation.y = structureYaw;
     structureMesh.castShadow = true; structureMesh.receiveShadow = true; structureMesh.name = 'Stilt fishing hut and jetty';
+    if (accessPathRange) structureMesh.userData.coastalPathRange = accessPathRange;
     root.add(structureMesh);
 
     const bulbs: THREE.BufferGeometry[] = [];
@@ -598,6 +714,8 @@ export function createCoastalDetails(
   return {
     treeColliders,
     structureColliders,
+    vegetationExclusionZones,
+    burnExclusionZones,
     boats,
     lightingAnchor,
     stats,

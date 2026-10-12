@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Campaign, Mission } from '../types';
+import { createJapanAirbaseFrame, isWithinJapanAirbaseVegetationFootprint } from '../content/airbaseLayout';
 import { sampleRoad, type CampaignRoad } from '../content/geography';
 import type { TreeCollider } from '../sim/collision';
 import { atlasUv, createVegetationAtlases } from './vegetationTextures';
@@ -87,8 +88,8 @@ const canopyProfiles: Record<Species, [number, number, number]> = {
 };
 
 const TAU = Math.PI * 2;
-const PLANT_TARGET = 20_000;
-const UNDERSTORY_TARGET = 5_600;
+const PLANT_TARGET = 26_000;
+const UNDERSTORY_TARGET = 7_000;
 const REED_TARGET = 1_100;
 const CELL_COLUMNS = 4;
 const CELL_ROWS = 3;
@@ -100,6 +101,8 @@ const HIGH_NEAR_DISTANCE = 220;
 const HIGH_MID_DISTANCE = 1_100;
 const LOW_NEAR_DISTANCE = 100;
 const LOW_MID_DISTANCE = 700;
+const ROAD_INDEX_CELL_SIZE = 64;
+const ROAD_INDEX_MARGIN = 24;
 const distance = (a: VegetationPoint, b: VegetationPoint) => Math.hypot(a.x - b.x, a.z - b.z);
 
 function seeded(seed: number) {
@@ -163,6 +166,55 @@ function distanceToLeg(point: VegetationPoint, [start, end]: readonly [Vegetatio
   const lengthSq = dx * dx + dz * dz;
   const t = lengthSq ? Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.z - start.z) * dz) / lengthSq)) : 0;
   return Math.hypot(point.x - start.x - t * dx, point.z - start.z - t * dz);
+}
+
+type RoadPath = { road: CampaignRoad; points: readonly { t: number; s: number }[] };
+type RoadSegment = {
+  roadIndex: number;
+  a: { t: number; s: number };
+  b: { t: number; s: number };
+};
+
+/**
+ * Roadside rows need to check for nearby crossing roads. Index each short
+ * sampled segment into the cells its clearance buffer touches so each tree
+ * only checks local segments instead of scanning every road in the campaign.
+ */
+function indexRoadSegments(paths: readonly RoadPath[]) {
+  const cells = new Map<string, RoadSegment[]>();
+  const cellFor = (value: number) => Math.floor(value / ROAD_INDEX_CELL_SIZE);
+  for (let roadIndex = 0; roadIndex < paths.length; roadIndex++) {
+    const points = paths[roadIndex].points;
+    for (let index = 1; index < points.length; index++) {
+      const a = points[index - 1], b = points[index];
+      const segment = { roadIndex, a, b };
+      const minT = cellFor(Math.min(a.t, b.t) - ROAD_INDEX_MARGIN);
+      const maxT = cellFor(Math.max(a.t, b.t) + ROAD_INDEX_MARGIN);
+      const minS = cellFor(Math.min(a.s, b.s) - ROAD_INDEX_MARGIN);
+      const maxS = cellFor(Math.max(a.s, b.s) + ROAD_INDEX_MARGIN);
+      for (let t = minT; t <= maxT; t++) for (let s = minS; s <= maxS; s++) {
+        const key = `${t}:${s}`;
+        let bucket = cells.get(key);
+        if (!bucket) cells.set(key, bucket = []);
+        bucket.push(segment);
+      }
+    }
+  }
+  return (point: { t: number; s: number }, skipRoadIndex: number) => {
+    const bucket = cells.get(`${cellFor(point.t)}:${cellFor(point.s)}`);
+    if (!bucket) return Infinity;
+    let nearest = Infinity;
+    for (const { roadIndex, a, b } of bucket) {
+      if (roadIndex === skipRoadIndex) continue;
+      const dt = b.t - a.t, ds = b.s - a.s;
+      const lengthSquared = dt * dt + ds * ds;
+      const fraction = lengthSquared === 0 ? 0 : THREE.MathUtils.clamp(
+        ((point.t - a.t) * dt + (point.s - a.s) * ds) / lengthSquared, 0, 1,
+      );
+      nearest = Math.min(nearest, Math.hypot(point.t - a.t - fraction * dt, point.s - a.s - fraction * ds));
+    }
+    return nearest;
+  };
 }
 
 type CrownLod = 'near' | 'mid' | 'far';
@@ -373,7 +425,7 @@ function makePalmFrond(): THREE.BufferGeometry {
   return geometry;
 }
 
-function randomLeafColor(rng: () => number, species: Species, t: number, s: number) {
+function randomLeafColor(rng: () => number, species: Species, t: number, s: number, campaignId: string) {
   const palette: Record<Species, [number, number, number]> = {
     broadleaf: [.265, .31, .235],
     emergent: [.245, .29, .22],
@@ -382,10 +434,16 @@ function randomLeafColor(rng: () => number, species: Species, t: number, s: numb
     coastal: [.275, .34, .235],
     palm: [.29, .38, .25],
   };
-  const [hue, saturation, lightness] = palette[species];
+  const [hue, saturation, baseLightness] = palette[species];
+  const japan = campaignId === 'jp_ketapang_2026_09';
+  const lightness = japan && species === 'secondary'
+    ? baseLightness + .045
+    : !japan && (species === 'broadleaf' || species === 'swamp')
+      ? baseLightness - .035
+      : baseLightness;
   return new THREE.Color().setHSL(
     hue + Math.sin(t * .0023 + s * .0017) * .009 + (rng() - .5) * .016,
-    saturation + (rng() - .5) * .08,
+    saturation + (rng() - .5) * .08 + (japan && species === 'secondary' ? .015 : 0),
     lightness + (rng() - .5) * .055,
   ).convertSRGBToLinear();
 }
@@ -397,12 +455,16 @@ function chooseSpecies(
   canopyNoise: number,
   t: number,
   s: number,
+  japan: boolean,
 ): Species {
   if (coastDistance < 350 && rng() < .68) return 'coastal';
-  if (riverDistance > 48 && riverDistance < 310 && rng() < .48) return 'swamp';
+  if (riverDistance > 48 && riverDistance < 310 && rng() < (japan ? .34 : .48)) return 'swamp';
   const secondaryBand = Math.sin(t * .00115 + 1.3) * Math.cos(s * .00135 - .6);
-  if (coastDistance > 250 && rng() < .035 + Math.max(0, secondaryBand) * .055) return 'palm';
+  const palmChance = japan ? .125 + Math.max(0, secondaryBand) * .065 : .035 + Math.max(0, secondaryBand) * .055;
+  if (coastDistance > 250 && rng() < palmChance) return 'palm';
   if (canopyNoise > .62 && coastDistance > 400 && rng() < .12) return 'emergent';
+  if (japan && rng() < .17) return 'secondary';
+  if (japan && (canopyNoise < .08 || secondaryBand < -.22)) return 'secondary';
   if (canopyNoise < -.12 || secondaryBand < -.38) return 'secondary';
   return 'broadleaf';
 }
@@ -439,8 +501,21 @@ function inZones(point: VegetationPoint, zones: readonly VegetationZone[], margi
   return zones.some(zone => distance(point, zone.center) < zone.radius + margin);
 }
 
-function makePlantField(campaign: Campaign, mission: Mission, context: VegetationContext, settlementLookup: ExclusionLookup) {
-  const seed = campaign.id === 'jp_ketapang_2026_09' ? 62017 : 62135;
+function makeAirportVegetationCheck(campaign: Campaign, mission: Mission) {
+  const frame = campaign.id === 'jp_ketapang_2026_09' && mission.shore
+    ? createJapanAirbaseFrame(campaign, mission)
+    : null;
+  return (point: VegetationPoint) => frame !== null && isWithinJapanAirbaseVegetationFootprint(frame, point);
+}
+
+function makePlantField(
+  campaign: Campaign,
+  context: VegetationContext,
+  settlementLookup: ExclusionLookup,
+  isAirportVegetationExcluded: (point: VegetationPoint) => boolean,
+) {
+  const japan = campaign.id === 'jp_ketapang_2026_09';
+  const seed = japan ? 62017 : 62135;
   const rng = seeded(seed);
   const plants: Plant[] = [];
   const colliders: TreeCollider[] = [];
@@ -454,27 +529,14 @@ function makePlantField(campaign: Campaign, mission: Mission, context: Vegetatio
   const missionFireZones = campaign.missions.map(item => ({ center: item.fire, radius: item.fire.radius + 46 }));
   const coast = context.coastAt(0);
   const roadHalfWidth = (kind: CampaignRoad['kind']) => kind === 'paved' ? 5.4 : kind === 'gravel' ? 4.2 : 3.1;
-  const roadPaths = (context.roadsideRoads ?? []).map(road => ({ road, points: sampleRoad(road.points, 8) }));
-  const distanceToRoad = (point: VegetationPoint, line: readonly { t: number; s: number }[]) => {
-    const local = context.local(point);
-    let nearest = Infinity;
-    for (let index = 1; index < line.length; index++) {
-      const a = line[index - 1], b = line[index];
-      const dt = b.t - a.t, ds = b.s - a.s;
-      const lengthSquared = dt * dt + ds * ds;
-      const fraction = lengthSquared === 0 ? 0 : THREE.MathUtils.clamp(
-        ((local.t - a.t) * dt + (local.s - a.s) * ds) / lengthSquared, 0, 1,
-      );
-      nearest = Math.min(nearest, Math.hypot(local.t - a.t - fraction * dt, local.s - a.s - fraction * ds));
-    }
-    return nearest;
-  };
+  const roadPaths: RoadPath[] = (context.roadsideRoads ?? []).map(road => ({ road, points: sampleRoad(road.points, 8) }));
+  const distanceToOtherRoad = indexRoadSegments(roadPaths);
   const makeTree = (point: VegetationPoint, ground: number, local: { t: number; s: number }, rng: () => number, routeDistance: number): Plant => {
     const coastDistance = local.t - context.coastAt(local.s);
     const riverDistance = Math.abs(local.s - context.riverS(local.t));
     const canopyNoise = Math.sin(local.t * .0046 + 1.1) * Math.cos(local.s * .0039 - .6)
       + .3 * Math.sin((local.t + local.s) * .0091);
-    const species = chooseSpecies(rng, coastDistance, riverDistance, canopyNoise, local.t, local.s);
+    const species = chooseSpecies(rng, coastDistance, riverDistance, canopyNoise, local.t, local.s, japan);
     const shape = shapeFor(species, rng, routeDistance);
     const yaw = rng() * TAU;
     const trunkScale = shape.species === 'coastal' ? .85 + rng() * .45 : .68 + rng() * .48;
@@ -488,7 +550,7 @@ function makePlantField(campaign: Campaign, mission: Mission, context: Vegetatio
       trunkScale,
       species: shape.species,
       bark,
-      leaves: randomLeafColor(rng, shape.species, local.t, local.s),
+      leaves: randomLeafColor(rng, shape.species, local.t, local.s, campaign.id),
       rootScale: shape.species === 'coastal' || shape.species === 'swamp' ? .58 + rng() * .65 : 0,
       burn: 'unburned',
       burnAge: 0,
@@ -510,7 +572,7 @@ function makePlantField(campaign: Campaign, mission: Mission, context: Vegetatio
   // authored road. General forest placement still respects the full road buffer.
   for (let roadIndex = 0; roadIndex < roadPaths.length; roadIndex++) {
     const { road } = roadPaths[roadIndex];
-    const samples = sampleRoad(road.points, 48);
+    const samples = sampleRoad(road.points, 32);
     const rowRandom = seeded(seed ^ Math.imul(roadIndex + 1, 0x9e3779b9));
     for (let index = 1; index < samples.length - 1; index++) {
       const previous = samples[index - 1], center = samples[index], next = samples[index + 1];
@@ -532,12 +594,11 @@ function makePlantField(campaign: Campaign, mission: Mission, context: Vegetatio
         if (!Number.isFinite(ground) || ground < -4 || context.isLake(point)) continue;
         if (Math.abs(local.s - context.riverS(local.t)) < 52) continue;
         if (roadsideLookup.contains(point.x, point.z, 25) || inZones(point, missionFireZones, 0)) continue;
-        if (mission.shore && distance(point, mission.shore) < 900) continue;
+        if (isAirportVegetationExcluded(point)) continue;
 
         // Keep rows out of intersections and away from flight paths, where
         // rotor clearance takes priority over roadside continuity.
-        if (roadPaths.some((other, otherIndex) => otherIndex !== roadIndex
-          && distanceToRoad(point, other.points) < roadHalfWidth(other.road.kind) + 10)) continue;
+        if (distanceToOtherRoad(local, roadIndex) < 15.4) continue;
         let routeDistance = Infinity;
         for (const leg of context.flightLegs) routeDistance = Math.min(routeDistance, distanceToLeg(point, leg));
         const plant = makeTree(point, ground, local, rowRandom, routeDistance);
@@ -574,15 +635,15 @@ function makePlantField(campaign: Campaign, mission: Mission, context: Vegetatio
     const riverDistance = Math.abs(local.s - context.riverS(local.t));
     if (riverDistance < 52) continue;
     if (settlementLookup.contains(point.x, point.z, 25) || inZones(point, missionFireZones, 0)) continue;
-    if (mission.shore && distance(point, mission.shore) < 900) continue;
+    if (isAirportVegetationExcluded(point)) continue;
 
     let routeDistance = Infinity;
     for (const leg of context.flightLegs) routeDistance = Math.min(routeDistance, distanceToLeg(point, leg));
 
     // Multi-scale stand structure gives irregular dense pockets instead of a uniform grid.
-    const standNoise = Math.sin(t * .0018 + .45) * Math.cos(s * .00155 - .8)
-      + .36 * Math.sin((t + s) * .0038) + .17 * Math.cos((t - s) * .0062);
-    const patchProbability = Math.max(.2, Math.min(.92, .56 + standNoise * .24));
+    const standNoise = .58 * Math.sin(t * .00155 + .45) * Math.cos(s * .00135 - .8)
+      + .29 * Math.sin((t + s) * .0034) + .13 * Math.cos((t - s) * .0061);
+    const patchProbability = Math.max(.1, Math.min(.96, .53 + standNoise * .37));
     if (rng() > patchProbability) continue;
 
     // Use the same final tree construction as roadside rows; this shared path
@@ -611,7 +672,8 @@ export function createVegetation(
       radius: zone.radius,
     })),
   );
-  const { plants, colliders } = makePlantField(campaign, mission, context, settlementLookup);
+  const isAirportVegetationExcluded = makeAirportVegetationCheck(campaign, mission);
+  const { plants, colliders } = makePlantField(campaign, context, settlementLookup, isAirportVegetationExcluded);
   applyBurnField(plants, context.burnField);
   const visualTier = context.visualTier ?? 'full';
   const foliageAtlas = createVegetationAtlases();
@@ -781,7 +843,7 @@ export function createVegetation(
     const point = context.fromLocal(t, s);
     if (context.isLake(point) || context.terrainHeight(point.x, point.z) < -4) continue;
     if (settlementLookup.contains(point.x, point.z, 20) || inZones(point, missionFireZones, 0)) continue;
-    if (mission.shore && distance(point, mission.shore) < 900) continue;
+    if (isAirportVegetationExcluded(point)) continue;
     if (Math.abs(s - context.riverS(t)) < 58) continue;
     let routeDistance = Infinity;
     for (const leg of context.flightLegs) routeDistance = Math.min(routeDistance, distanceToLeg(point, leg));
@@ -792,7 +854,7 @@ export function createVegetation(
     dummy.rotation.set(0, rng() * TAU, 0);
     dummy.updateMatrix();
     understory.setMatrixAt(understoryCount, dummy.matrix);
-    const leafColor = randomLeafColor(rng, 'secondary', t, s);
+    const leafColor = randomLeafColor(rng, 'secondary', t, s, campaign.id);
     const burnSample = context.burnField?.sample(point.x, point.z);
     if (burnSample) {
       const burn = classifyBurnSeverity(burnSample.severity);

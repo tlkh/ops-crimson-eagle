@@ -20,6 +20,29 @@ const makeBurnField = (): BurnField => ({
 });
 
 describe('ground surface material', () => {
+  it('invalidates reflections for a late atlas without reviving a disposed scene', async () => {
+    const pending: Array<(texture: THREE.Texture) => void> = [];
+    const assets = {
+      acquire(_path: string, options: { fallback: THREE.Texture }) {
+        return {
+          placeholder: options.fallback,
+          ready: new Promise<THREE.Texture>(resolve => pending.push(resolve)),
+          release() {},
+        };
+      },
+    };
+    let changes = 0;
+    const active = createGroundSurface(assets, undefined, () => { changes++; });
+    const released = createGroundSurface(assets, undefined, () => { changes++; });
+    released.dispose();
+    const atlas = new THREE.Texture();
+    pending.forEach(resolve => resolve(atlas));
+    await Promise.resolve();
+    expect(changes).toBe(1);
+    active.dispose();
+    atlas.dispose();
+  });
+
   it('keeps its atlas, normal and roughness shader hooks composable with height fog', () => {
     const ground = createGroundSurface();
     const mesh = new THREE.Mesh(new THREE.BufferGeometry(), ground.material);

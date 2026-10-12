@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Campaign, Mission, SimState } from '../types';
 import { bucketSurfaceHeight } from '../sim/bucket';
 import { shipLandingLocalZ, shipLandingPoint, shipToWorld } from '../sim/shipLanding';
+import { createJapanAirbaseFrame } from '../content/airbaseLayout';
 
 const TAU = Math.PI * 2;
 const clamp = THREE.MathUtils.clamp;
@@ -21,8 +22,9 @@ export function createGroundCrew(scene: THREE.Scene, campaign: Campaign, mission
   const japanese = campaign.id === 'jp_ketapang_2026_09';
   const site = japanese ? (mission.shore ?? mission.lake) : shipLandingPoint(campaign, mission);
   const siteX = site.x, siteZ = site.z;
+  const shoreFrame = japanese && mission.shore ? createJapanAirbaseFrame(campaign, mission) : null;
   const aroundSite = (dx: number, dz: number) => japanese
-    ? { x: siteX + dx, z: siteZ + dz }
+    ? shoreFrame?.toWorld({ x: dx, z: dz }) ?? { x: siteX + dx, z: siteZ + dz }
     : shipToWorld(mission, { x: dx, z: shipLandingLocalZ(campaign) + dz });
   const floorAt = (x: number, z: number) => bucketSurfaceHeight(campaign, mission, x, z);
 
@@ -131,7 +133,7 @@ export function createGroundCrew(scene: THREE.Scene, campaign: Campaign, mission
 
   const surfaceProp = (group: THREE.Group, x: number, z: number) => {
     group.position.set(x, floorAt(x, z), z);
-    group.rotation.y = japanese ? 0 : mission.shipHeading;
+    group.rotation.y = shoreFrame?.heading ?? (japanese ? 0 : mission.shipHeading);
     root.add(group);
     return group;
   };
@@ -236,7 +238,7 @@ export function createGroundCrew(scene: THREE.Scene, campaign: Campaign, mission
     cart.visible = toolbox.visible = true;
     // Axle sway is deliberately tiny: the trolley remains planted while the
     // aircraft and bucket move independently through the simulation.
-    cart.rotation.y = japanese ? 0 : mission.shipHeading;
+    cart.rotation.y = shoreFrame?.heading ?? (japanese ? 0 : mission.shipHeading);
     cart.position.x = cartX;
     cart.position.z = cartZ;
     cart.position.y = floorAt(cartX, cartZ);

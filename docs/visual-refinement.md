@@ -23,3 +23,19 @@ The images below are from temporary fixed camera views of the real rendering mod
 Ground-layer haze now integrates an exponentially thinning atmosphere along the view ray. It uses the current atmospheric fog colour, including local smoke tint, while keeping the foreground clear. Shader hooks compose with instanced fire and burn-scar materials; no extra render pass is required. Ray length is calculated per fragment to avoid excessive fog on nearby parts of the large sea plane. The chase view also widens gradually by up to three degrees between 80 and 320 metres above terrain, revealing more ground as the aircraft climbs.
 
 Taut-sling damping now acts on tangential velocity relative to the moving hook. Inward velocity, slack, gravity, surface contact, and the 22-metre length constraint remain active. Empty and loaded acceleration/reversal regressions check settling and clearance. Virtual joysticks use a 6.5% radial deadzone and smooth response, with maximum yaw/cyclic/collective commands of 68%/78%/86%; the knob still follows the pointer directly and release immediately clears the commands.
+
+## Close-range material refinement — 12 October 2026
+
+Ground albedo and relief have slightly more definition at working altitude, using the existing packed atlas and habitat noise. The extra medium-scale variation fades with distance; height fog, terrain geometry, collision heights and the immutable burn field remain unchanged. Painted aircraft surfaces use a slightly broader environment response and stronger local occlusion to reveal fuselage curvature without changing livery colours, geometry or lighting presets. No new textures or render passes are added.
+
+These adjustments are visual tuning, not evidence of higher physical-device frame rates. Phone thermal and GPU acceptance still follows [graphics quality](graphics-quality.md).
+
+## Flight interface and surface effects — 12 October 2026
+
+The application owns a single flight/map/pause state. The tactical map pauses the sortie, hides flight controls and traps focus; M and Escape share the same transitions as the buttons. Pause includes a compact keyboard reference. Larger HUD labels and guidance-aligned messages leave the aircraft and sling clearer.
+
+Mission briefings show the goal before the map on phones, keep launch outside bounded scrolling content, and support expanding the complete terrain map. Resume labels include the checkpoint phase and elapsed time, using the same eligibility rules as mission selection; saves from older world revisions still undergo position validation at launch.
+
+Flame cards remain upright and sample their moving bases against terrain, with irregular feathered contact edges. Freshwater has quieter waves and reflection distortion while rotor wash, bucket ripples and sea motion remain active. Paused planar reflections reuse their image until the camera, scene, texture, quality or viewport changes. Late ground-atlas loads explicitly invalidate the reflection cache.
+
+Verification: 278 tests across 53 files passed, including all twelve mission integrations. Browser checks covered 1440×900, 1280×720, 390×844 and 844×390 layouts, launch/resume, campaign switching, map/pause shortcuts and focus, plus fire, lake and night fixtures in both campaigns. These checks do not establish physical-phone performance.

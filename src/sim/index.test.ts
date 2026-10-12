@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { Campaign, FlightCommand, Mission } from '../types';
 import { createSim, estimateLandingFuel, getObjectiveAction, grossMass, stepSim } from './index';
 import type { ExtendedSimState } from './types';
-import { renderedTerrainHeight, setStructureColliders, setTreeColliders, terrainHeight } from './collision';
+import { renderedTerrainHeight, setStructureColliders, setTreeColliders } from './collision';
 import { BUCKET_BODY_HEIGHT_M, BUCKET_LIFT_OFFSET_M, SLING_LENGTH_M,
   LAKE_SURFACE_M, bucketMinimumRimHeight, bucketSurfaceHeight, getBucketHook, isBucketTouchingLake } from './bucket';
 import { shipLandingPoint } from './shipLanding';
 import { shipToLocal, shipToWorld } from './shipLanding';
 import { campaigns } from '../content';
+import { campaignTerrainFrame } from '../content/terrainFrame';
 
 const noInput: FlightCommand = {
   yaw: 0,
@@ -601,14 +602,17 @@ describe('aircraft collision and ground clearance', () => {
   it('fails a terrain impact and raises the stopped aircraft above the visible ground', () => {
     const { campaign, mission } = makeFixture();
     const state = createSim(campaign, mission) as ExtendedSimState;
-    const ground = terrainHeight(campaign, mission, 500, 350)!;
+    const frame = campaignTerrainFrame(campaign);
+    const point = { x: frame.ux * 1500 + frame.sx * 500, z: frame.uz * 1500 + frame.sz * 500 };
+    const ground = renderedTerrainHeight(campaign, mission, point.x, point.z)!;
+    expect(ground).not.toBeNull();
     state.phase = 'transit';
-    state.position = { x: 500, y: ground + 1, z: 350 };
+    state.position = { ...point, y: ground + 1 };
     stepSim(state, noInput, campaign, mission);
     expect(state.phase).toBe('failed');
     expect(state.failureCause).toBe('collision');
     expect(state.message).toContain('Terrain impact');
-    expect(state.position.y).toBeGreaterThanOrEqual(renderedTerrainHeight(campaign, mission, 500, 350)! + 2.52);
+    expect(state.position.y).toBeGreaterThanOrEqual(ground + 2.52);
   });
 
   it('treats a fast deck strike as a crash but permits a slow recovery', () => {
@@ -694,9 +698,10 @@ describe('aircraft collision and ground clearance', () => {
 
   it('detects a rotor strike on a structure and clears the shore pad on gentle contact', () => {
     const { campaign, mission } = makeFixture(true);
-    setStructureColliders(mission, [{ x: 510, z: 506, halfWidth: 1, halfLength: 1, bottom: 15, top: 30, label: 'tower' }]);
+    const ground = renderedTerrainHeight(campaign, mission, 500, 500) ?? 0;
+    setStructureColliders(mission, [{ x: 510, z: 506, halfWidth: 1, halfLength: 1, bottom: ground + 15, top: ground + 30, label: 'tower' }]);
     const strike = createSim(campaign, mission) as ExtendedSimState;
-    strike.position = { x: 500, y: 18, z: 500 };
+    strike.position = { x: 500, y: ground + 18, z: 500 };
     stepSim(strike, noInput, campaign, mission);
     expect(strike.failureCause).toBe('collision');
     expect(strike.message).toContain('tower impact');

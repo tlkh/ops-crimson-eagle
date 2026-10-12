@@ -2,8 +2,12 @@ import * as THREE from 'three';
 import type { Campaign, Mission } from '../types';
 import type { StructureCollider, TreeCollider } from '../sim/collision';
 import { getCampaignGeography, getCampaignRoadTermini, sampleRoad } from '../content/geography';
+import { getCampaignSites } from '../content/geographySites';
+import { createJapanAirbaseFrame, isWithinJapanAirbaseVegetationFootprint } from '../content/airbaseLayout';
 import { isWithinLakeOutline } from '../sim/lakeShape';
 import type { BurnField } from './burnField';
+import { generateRoadFrontageCandidates, selectSpacedFrontageCandidates, type FrontageCandidate } from './roadFrontage';
+import { createJunctionMeshPair, junctionTrimIntervals, trimRoadForJunctions, type JunctionDefinition } from './roadJunctions';
 
 type Point = { x: number; z: number };
 type LocalPoint = { t: number; s: number };
@@ -27,10 +31,14 @@ export interface LandUseStats {
   roadLengthM: number;
   trackLengthM: number;
   fieldCount: number;
+  fieldIds: readonly string[];
   buildingCount: number;
   bridgeCount: number;
   palmCount: number;
   roadEndClusterCount: number;
+  drivewayCount: number;
+  destinationBuildingCounts: Readonly<Record<string, number>>;
+  destinationDrivewayCounts: Readonly<Record<string, number>>;
   drawCalls: number;
   triangles: number;
 }
@@ -321,7 +329,7 @@ function makeBarn(
   return barn;
 }
 
-type FieldSpec = { t: number; s: number; length: number; width: number; angle: number; crop: 'paddy' | 'orchard' | 'dry' };
+type FieldSpec = { id: string; t: number; s: number; length: number; width: number; angle: number; crop: 'paddy' | 'orchard' | 'dry'; entrance: LocalPoint };
 
 function fieldPoint(field: FieldSpec, along: number, across: number): LocalPoint {
   const c = Math.cos(field.angle), s = Math.sin(field.angle);
@@ -427,10 +435,22 @@ export function createLandUse(scene: THREE.Scene, campaign: Campaign, mission: M
   const origin = context.fromLocal(0, 0);
   const along = context.fromLocal(1, 0);
   const tAxis = { x: along.x - origin.x, z: along.z - origin.z };
-  const yawT = Math.atan2(tAxis.x, tAxis.z);
   const toWorld = (point: LocalPoint) => context.fromLocal(point.t, point.s);
   const groundAt = (x: number, z: number) => context.renderedTerrainHeight(x, z) ?? context.terrainHeight(x, z);
   const geography = getCampaignGeography(campaign);
+  const junctions = (geography as typeof geography & { junctions?: readonly JunctionDefinition[] }).junctions ?? [];
+  const destinations = (geography as typeof geography & { destinations?: readonly { kind: string; position: LocalPoint }[] }).destinations ?? [];
+  const roadEndTermini = getCampaignRoadTermini(geography.roads).filter(terminus => {
+    const road = geography.roads.find(item => item.id === terminus.roadId) as (typeof geography.roads[number] & { frontage?: 'settlement' | 'rural' | 'none' }) | undefined;
+    return !!road && road.frontage !== 'none' && !terminus.roadId.startsWith('response-access-')
+      && geography.settlements.every(settlement => localDistance(settlement.position, terminus.position) > 210)
+      && !destinations.some(destination => ['field', 'coastal', 'gate', 'response'].includes(destination.kind)
+        && localDistance(destination.position, terminus.position) < 110);
+  });
+  const sites = getCampaignSites(campaign);
+  const japanAirbase = campaign.id === 'jp_ketapang_2026_09' && mission.shore
+    ? createJapanAirbaseFrame(campaign, mission)
+    : null;
   const settlementPosition = (kind: 'village' | 'hamlet' | 'farm', index = 0): LocalPoint => {
     const settlement = geography.settlements.filter(item => item.kind === kind)[index];
     if (!settlement) throw new Error(`Campaign ${campaign.id} has no ${kind} settlement at index ${index}`);
@@ -465,7 +485,7 @@ export function createLandUse(scene: THREE.Scene, campaign: Campaign, mission: M
     if (distance(world, mission.fire) < mission.fire.radius + 140) return false;
     if (protectedMarkers.some(item => distance(world, item.fire) < item.fire.radius + 140
       || isWithinLakeOutline(campaign.id, item.lake, world, 150))) return false;
-    if (context.shore && distance(world, context.shore) < 930) return false;
+    if (japanAirbase && isWithinJapanAirbaseVegetationFootprint(japanAirbase, world)) return false;
     if (context.flightLegs.some(leg => distanceToLeg(world, leg) < routeMargin)) return false;
     return true;
   };
@@ -535,7 +555,13 @@ export function createLandUse(scene: THREE.Scene, campaign: Campaign, mission: M
     if (style.lengthClass === 'track') trackLengthM += totalLength;
     else roadLengthM += totalLength;
     const riverHalfWidth = context.river.halfWidth * 1.22 + style.shoulderWidth * .5 + 4;
-    for (const run of dryRoadRuns(points, context.river.centerS, riverHalfWidth)) {
+    const junctionCuts = junctionTrimIntervals(road.points, junctions, road.id, 12);
+    const totalRoadDistance = cumulativeDistances(road.points).at(-1) ?? 0;
+    const terminalCuts = roadEndTermini.filter(terminus => terminus.roadId === road.id).map(terminus => terminus.end === 'end'
+      ? [Math.max(0, totalRoadDistance - 10), totalRoadDistance] as const
+      : [0, Math.min(10, totalRoadDistance)] as const);
+    const trimmedRuns = trimRoadForJunctions(road.points, [...junctionCuts, ...terminalCuts]).map(run => sampleRoad(run, 8));
+    for (const trimmed of trimmedRuns) for (const run of dryRoadRuns(trimmed, context.river.centerS, riverHalfWidth)) {
       makeBurnableRoadMesh(ribbonGeometry(run, style.shoulderWidth, context.fromLocal, groundAt, .12), style.shoulder, `${road.kind} road shoulder`);
       makeBurnableRoadMesh(ribbonGeometry(run, style.surfaceWidth, context.fromLocal, groundAt, .22), style.surface, `${road.kind} road surface`);
     }
@@ -594,45 +620,24 @@ export function createLandUse(scene: THREE.Scene, campaign: Campaign, mission: M
     addRoadExclusion(points[points.length - 1], style.shoulderWidth * .5 + 8);
   }
 
-  // Shared geography vertices are literal junctions. A small conforming apron
-  // fills the corners where branches with different widths meet.
-  const junctions = new Map<string, { point: LocalPoint; kinds: Set<'paved' | 'gravel' | 'track'> }>();
-  for (const { road } of roadPaths) for (const point of road.points) {
-    const key = `${point.t.toFixed(3)},${point.s.toFixed(3)}`;
-    const junction = junctions.get(key) ?? { point, kinds: new Set<'paved' | 'gravel' | 'track'>() };
-    junction.kinds.add(road.kind);
-    junctions.set(key, junction);
-  }
-  for (const { point, kinds } of junctions.values()) {
-    if (kinds.size < 2) continue;
-    const radius = Math.max(...[...kinds].map(kind => halfWidthFor(kind))) + 1.5;
-    const positions: number[] = [], indices: number[] = [];
-    const center = toWorld(point);
-    positions.push(center.x, groundAt(center.x, center.z) + .3, center.z);
-    const segments = 20;
-    for (let i = 0; i < segments; i++) {
-      const angle = i / segments * TAU;
-      const world = toWorld({ t: point.t + Math.cos(angle) * radius, s: point.s + Math.sin(angle) * radius });
-      positions.push(world.x, groundAt(world.x, world.z) + .3, world.z);
-      const next = 1 + (i + 1) % segments;
-      indices.push(0, next, i + 1);
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setIndex(indices); geometry.computeVertexNormals();
-    const material = kinds.has('paved') ? pavedMaterial : kinds.has('gravel') ? gravelMaterial : trackMaterial;
-    makeBurnableRoadMesh(geometry, material, 'Connected road junction');
+  // Each authored graph node gets a single, shaped surface and shoulder apron.
+  // Incident road strips stop at the apron edge, so same-kind branches meet as
+  // cleanly as roads of different widths.
+  for (const junction of junctions) {
+    if (junction.arms.length < 2) continue;
+    const pair = createJunctionMeshPair(junction, context.fromLocal, groundAt, 12);
+    if (!pair) continue;
+    const kinds = new Set(junction.arms.map(arm => arm.kind));
+    const surfaceMaterial = kinds.has('paved') ? pavedMaterial : kinds.has('gravel') ? gravelMaterial : trackMaterial;
+    const shoulderMaterial = kinds.has('paved') ? pavedShoulderMaterial : kinds.has('gravel') ? gravelShoulderMaterial : trackEdgeMaterial;
+    makeBurnableRoadMesh(pair.shoulder, shoulderMaterial, `Junction ${junction.id ?? 'node'} shoulder apron`);
+    makeBurnableRoadMesh(pair.surface, surfaceMaterial, `Junction ${junction.id ?? 'node'} road surface`);
   }
 
-  const fieldSpecs: FieldSpec[] = [
-    { t: village.t + 280, s: village.s - 260, length: 118, width: 78, angle: .12, crop: 'paddy' },
-    { t: hamlet.t + 160, s: hamlet.s + 670, length: 138, width: 84, angle: -.1, crop: 'paddy' },
-    { t: hamlet.t + 320, s: hamlet.s - 680, length: 114, width: 68, angle: .22, crop: 'dry' },
-    { t: farmOne.t + 10, s: farmOne.s + 810, length: 142, width: 86, angle: .06, crop: 'orchard' },
-    { t: farmOne.t - 190, s: farmOne.s - 690, length: 108, width: 70, angle: -.18, crop: 'dry' },
-    { t: farmTwo.t - 230, s: farmTwo.s - 740, length: 148, width: 92, angle: .08, crop: 'paddy' },
-    { t: farmTwo.t + 250, s: farmTwo.s + 410, length: 126, width: 82, angle: -.16, crop: 'orchard' },
-  ];
+  const fieldSpecs: FieldSpec[] = sites.fields.map(field => ({
+    id: field.id, t: field.center.t, s: field.center.s, length: field.length,
+    width: field.width, angle: field.angle, crop: field.crop, entrance: field.entrance,
+  }));
   const fieldOverlapsRoad = (field: FieldSpec) => {
     const boundary = fieldBoundary(field);
     return roadPaths.some(({ road, points }) => points.some(point => pointInPolygon(point, boundary)
@@ -642,6 +647,7 @@ export function createLandUse(scene: THREE.Scene, campaign: Campaign, mission: M
   const cropPositions: number[] = [], cropColors: number[] = [], cropIndices: number[] = [];
   const cropPalette: Record<FieldSpec['crop'], string> = { paddy: '#66733e', orchard: '#6b7847', dry: '#87774c' };
   let fieldCount = 0;
+  const renderedFieldIds: string[] = [];
   for (const field of fieldSpecs) {
     if (!placementClear({ t: field.t, s: field.s }, 210) || fieldOverlapsRoad(field)) continue;
     const variation = (random() - .5) * .035;
@@ -651,6 +657,7 @@ export function createLandUse(scene: THREE.Scene, campaign: Campaign, mission: M
     appendCropRows(cropPositions, cropColors, cropIndices, field, rows, context.fromLocal, groundAt);
     addExclusion({ t: field.t, s: field.s }, Math.hypot(field.length, field.width) * .53 + 15);
     fieldCount++;
+    renderedFieldIds.push(field.id);
   }
   if (fieldIndices.length) {
     const geometry = new THREE.BufferGeometry();
@@ -667,72 +674,328 @@ export function createLandUse(scene: THREE.Scene, campaign: Campaign, mission: M
     const rows = new THREE.Mesh(geometry, cropMaterial); rows.name = 'Crop rows'; rows.receiveShadow = true; root.add(rows);
   }
 
-  let buildingCount = 0;
+  let buildingCount = 0, drivewayCount = 0;
+  const destinationBuildingCounts: Record<string, number> = {};
+  const destinationDrivewayCounts: Record<string, number> = {};
   const drivewayPositions: number[] = [], drivewayIndices: number[] = [];
-  const addDriveway = (house: LocalPoint, scale: number) => {
-    const start = { t: house.t - 7 * scale, s: house.s };
-    let target: LocalPoint | undefined;
+  type DrivewayPlan = { start: LocalPoint; target: LocalPoint; points: LocalPoint[]; length: number };
+  const frontageEligible = (road: typeof roadPaths[number]['road']) =>
+    (road as typeof road & { frontage?: 'settlement' | 'rural' | 'none' }).frontage !== 'none';
+  const drivewayPlan = (house: LocalPoint, yaw: number, frontDepth: number, preferred?: LocalPoint): DrivewayPlan | null => {
+    const facingWorld = { x: -Math.sin(yaw), z: -Math.cos(yaw) };
+    const tUnit = { x: tAxis.x, z: tAxis.z };
+    const sOrigin = context.fromLocal(0, 1), sUnit = { x: sOrigin.x - origin.x, z: sOrigin.z - origin.z };
+    const door = {
+      t: house.t + (facingWorld.x * tUnit.x + facingWorld.z * tUnit.z) * (frontDepth - .25),
+      s: house.s + (facingWorld.x * sUnit.x + facingWorld.z * sUnit.z) * (frontDepth - .25),
+    };
+    let target: LocalPoint | undefined = preferred;
     let nearest = Infinity;
-    for (const { points } of roadPaths) for (let i = 1; i < points.length; i++) {
-      const a = points[i - 1], b = points[i], dt = b.t - a.t, ds = b.s - a.s;
-      const lengthSq = dt * dt + ds * ds;
-      const u = lengthSq ? clamp(((start.t - a.t) * dt + (start.s - a.s) * ds) / lengthSq, 0, 1) : 0;
-      const projected = { t: a.t + dt * u, s: a.s + ds * u };
-      const gap = localDistance(start, projected);
-      if (gap < nearest) { nearest = gap; target = projected; }
+    if (preferred) nearest = localDistance(door, preferred);
+    else for (const { road, points } of roadPaths) {
+      if (!frontageEligible(road)) continue;
+      for (let i = 1; i < points.length; i++) {
+        const a = points[i - 1], b = points[i], dt = b.t - a.t, ds = b.s - a.s;
+        const lengthSq = dt * dt + ds * ds;
+        const u = lengthSq ? clamp(((door.t - a.t) * dt + (door.s - a.s) * ds) / lengthSq, 0, 1) : 0;
+        const projected = { t: a.t + dt * u, s: a.s + ds * u };
+        const gap = localDistance(door, projected);
+        if (gap < nearest) { nearest = gap; target = projected; }
+      }
     }
-    if (!target || nearest < 12 || nearest > 72) return;
-    const points = sampleRoad([start, target], 4);
-    if (points.some(point => {
+    if (!target || nearest < 7 || nearest > 64) return null;
+    const points = sampleRoad([door, target], 4);
+    if (points.some((point, index) => {
       const world = toWorld(point);
-      return !placementClear(point, 90)
+      // A driveway is ground-level circulation. Keep the surrounding lot clear
+      // of flight legs, but don't reject the connection itself for crossing a
+      // high-route approach corridor.
+      return !placementClear(point, 0)
         || Math.abs(point.s - context.river.centerS(point.t)) < context.river.halfWidth * 1.22 + 10
-        || groundAt(world.x, world.z) < -2;
-    })) return;
-    const geometry = ribbonGeometry(points, 2.4, context.fromLocal, groundAt, .2);
+        || groundAt(world.x, world.z) < -2
+        || structureColliders.some(item => distance(world, { x: item.x, z: item.z }) < Math.hypot(item.halfWidth, item.halfLength) + 2)
+        || (index > 0 && treeColliders.some(item => distance(world, { x: item.x, z: item.z }) < item.radius + 2));
+    })) return null;
+    return { start: door, target, points, length: nearest };
+  };
+  const commitDriveway = (plan: DrivewayPlan, destinationId?: string) => {
+    const geometry = ribbonGeometry(plan.points, 2.4, context.fromLocal, groundAt, .2);
     const position = geometry.getAttribute('position');
     const base = drivewayPositions.length / 3;
     for (let i = 0; i < position.count; i++) drivewayPositions.push(position.getX(i), position.getY(i), position.getZ(i));
     if (geometry.index) for (const index of geometry.index.array) drivewayIndices.push(base + index);
     geometry.dispose();
-    trackLengthM += nearest;
-    for (let d = 0; d <= nearest; d += 4) addRoadExclusion({ t: start.t + (target.t - start.t) * d / nearest, s: start.s + (target.s - start.s) * d / nearest }, 9);
+    trackLengthM += plan.length;
+    for (let d = 0; d <= plan.length; d += 4) {
+      const fraction = plan.length ? Math.min(1, d / plan.length) : 1;
+      addRoadExclusion({ t: THREE.MathUtils.lerp(plan.start.t, plan.target.t, fraction), s: THREE.MathUtils.lerp(plan.start.s, plan.target.s, fraction) }, 3.5);
+    }
+    drivewayCount++;
+    if (destinationId) destinationDrivewayCounts[destinationId] = (destinationDrivewayCounts[destinationId] ?? 0) + 1;
   };
-  const placeHouse = (local: LocalPoint, scale: number, label: string, jitter = 0) => {
-    if (!placementClear(local, 200) || !roadClear(local, 13 * scale)) return;
+  const houseYaw = (house: LocalPoint, roadPoint: LocalPoint) => {
+    const a = toWorld(house), b = toWorld(roadPoint);
+    return Math.atan2(-(b.x - a.x), -(b.z - a.z));
+  };
+  const frontageFootprintClear = (candidate: Pick<FrontageCandidate, 'center' | 'roadPoint' | 'tangent'>, width: number, depth: number, routeMargin: number) => {
+    if (junctions.some(junction => localDistance(candidate.roadPoint, junction.position) < 20)) return false;
+    const normal = { t: -candidate.tangent.s, s: candidate.tangent.t };
+    const corners = [
+      { along: -width * .5, across: -depth * .5 }, { along: width * .5, across: -depth * .5 },
+      { along: width * .5, across: depth * .5 }, { along: -width * .5, across: depth * .5 },
+    ].map(({ along: a, across: b }) => ({
+      t: candidate.center.t + candidate.tangent.t * a + normal.t * b,
+      s: candidate.center.s + candidate.tangent.s * a + normal.s * b,
+    }));
+    if (corners.some(point => !placementClear(point, routeMargin) || !roadClear(point, 1.1))) return false;
+    const world = toWorld(candidate.center), radius = Math.hypot(width * .5, depth * .5);
+    return structureColliders.every(item => distance(world, { x: item.x, z: item.z })
+      > radius + Math.hypot(item.halfWidth, item.halfLength) + 3)
+      && treeColliders.every(item => distance(world, { x: item.x, z: item.z }) > radius + item.radius + 3);
+  };
+  const addBuildingFootprint = (local: LocalPoint, width: number, depth: number) => {
+    addExclusion(local, Math.hypot(width * .5, depth * .5) + 1.5);
+  };
+  const placeHouse = (candidate: Pick<FrontageCandidate, 'center' | 'roadPoint' | 'tangent'>, scale: number, label: string, jitter = 0, destinationId?: string) => {
+    const local = candidate.center;
+    const yaw = houseYaw(local, candidate.roadPoint) + jitter;
+    if (!frontageFootprintClear(candidate, 8.93 * scale, 11.8 * scale, 150)) return false;
+    const access = drivewayPlan(local, yaw, 5.5 * scale, candidate.roadPoint);
+    if (!access) return false;
     const world = toWorld(local), ground = groundAt(world.x, world.z);
-    makeStiltHouse(root, world, ground, yawT + jitter, scale, materials, label, structureColliders);
-    addDriveway(local, scale);
-    addExclusion(local, 24 * scale);
+    makeStiltHouse(root, world, ground, yaw, scale, materials, label, structureColliders);
+    commitDriveway(access, destinationId);
+    addBuildingFootprint(local, 8.93 * scale, 11.8 * scale);
     buildingCount++;
+    if (destinationId) destinationBuildingCounts[destinationId] = (destinationBuildingCounts[destinationId] ?? 0) + 1;
+    return true;
   };
-  const placeBarn = (local: LocalPoint, label: string, jitter = 0) => {
-    if (!placementClear(local, 200) || !roadClear(local, 17)) return;
+  const placeBarn = (candidate: Pick<FrontageCandidate, 'center' | 'roadPoint' | 'tangent'>, label: string, jitter = 0, destinationId?: string) => {
+    const local = candidate.center;
+    const yaw = houseYaw(local, candidate.roadPoint) + jitter;
+    if (!frontageFootprintClear(candidate, 17.9, 13.4, 150)) return false;
+    const access = drivewayPlan(local, yaw, 6.45, candidate.roadPoint);
+    if (!access) return false;
     const world = toWorld(local), ground = groundAt(world.x, world.z);
-    makeBarn(root, world, ground, yawT + jitter, materials, label, structureColliders);
-    addDriveway(local, 1.1);
-    addExclusion(local, 34);
+    makeBarn(root, world, ground, yaw, materials, label, structureColliders);
+    commitDriveway(access, destinationId);
+    addBuildingFootprint(local, 17.9, 13.4);
     buildingCount++;
+    if (destinationId) destinationBuildingCounts[destinationId] = (destinationBuildingCounts[destinationId] ?? 0) + 1;
+    return true;
   };
 
-  // A roadside lakeside village, followed inland by a smaller hamlet and two working farms.
-  for (const [dt, ds, size, turn] of [
-    [-115, 310, .94, -.06], [-68, 360, 1.02, .04], [-18, 300, .88, .1],
-    [32, 360, 1.04, -.08], [83, 300, .9, .03], [132, 360, 1.08, .08], [184, 310, .94, -.1],
-  ] as const) placeHouse({ t: village.t + dt, s: village.s + ds }, size, 'village house', turn);
-  addExclusion(village, 235);
+  const localPathAt = (points: readonly LocalPoint[], chainage: number) => {
+    const cumulative = cumulativeDistances(points);
+    const clamped = clamp(chainage, 0, cumulative.at(-1) ?? 0);
+    return pointAtDistance(points, cumulative, clamped);
+  };
+  type FrontageAnchor = { road: typeof roadPaths[number]['road']; point: LocalPoint; chainage: number; tangent: LocalPoint; distance: number; length: number };
+  const nearestFrontageAnchors = (anchor: LocalPoint): FrontageAnchor[] => {
+    const bestByRoad = new Map<string, FrontageAnchor>();
+    for (const { road, points } of roadPaths) {
+      if (!frontageEligible(road)) continue;
+      const cumulative = cumulativeDistances(points);
+      let best: FrontageAnchor | undefined;
+      for (let i = 1; i < points.length; i++) {
+        const a = points[i - 1], b = points[i], dt = b.t - a.t, ds = b.s - a.s;
+        const lengthSq = dt * dt + ds * ds, span = Math.sqrt(lengthSq);
+        const u = lengthSq ? clamp(((anchor.t - a.t) * dt + (anchor.s - a.s) * ds) / lengthSq, 0, 1) : 0;
+        const point = { t: a.t + dt * u, s: a.s + ds * u };
+        const gap = localDistance(anchor, point);
+        const length = cumulative.at(-1) ?? 0;
+        if (!best || gap < best.distance - .5 || (gap <= best.distance + .5 && length > best.length)) {
+          best = { road, point, chainage: cumulative[i - 1] + span * u, tangent: { t: dt / (span || 1), s: ds / (span || 1) }, distance: gap, length };
+        }
+      }
+      if (best) bestByRoad.set(road.id, best);
+    }
+    return [...bestByRoad.values()].sort((a, b) => a.distance - b.distance || a.road.id.localeCompare(b.road.id));
+  };
+  const nearestFrontageAnchor = (anchor: LocalPoint) => nearestFrontageAnchors(anchor)[0];
+  const candidateAtFrontage = (nearest: FrontageAnchor, chainage: number, side: -1 | 1, setback: number): FrontageCandidate | null => {
+    if (chainage < 2 || chainage > nearest.length - 2) return null;
+    const path = roadPaths.find(item => item.road.id === nearest.road.id)!.points;
+    const station = localPathAt(path, chainage);
+    // Re-sample the local path for an accurate tangent after moving along a curve.
+    const next = localPathAt(path, chainage + 4);
+    const previous = localPathAt(path, chainage - 4);
+    const length = Math.hypot(next.t - previous.t, next.s - previous.s) || 1;
+    const direction = { t: (next.t - previous.t) / length, s: (next.s - previous.s) / length };
+    const normal = { t: -direction.s, s: direction.t };
+    const center = { t: station.t + normal.t * side * setback, s: station.s + normal.s * side * setback };
+    return { roadId: nearest.road.id, kind: nearest.road.kind, chainage, center, roadPoint: station, tangent: direction, side, score: 0 };
+  };
+  const anchoredCandidate = (anchor: LocalPoint, offset: number, side: -1 | 1, setback: number): FrontageCandidate | null => {
+    const nearest = nearestFrontageAnchor(anchor);
+    if (!nearest || nearest.distance > 160) return null;
+    return candidateAtFrontage(nearest, nearest.chainage + offset, side, setback);
+  };
+  const placeAnchoredCluster = (anchor: LocalPoint, count: number, label: string, scale = .95, destinationId?: string) => {
+    let bestGroup: FrontageCandidate[] = [];
+    let bestScore = -Infinity;
+    const anchors = nearestFrontageAnchors(anchor).filter(item => item.distance <= 850).slice(0, 6);
+    for (const frontage of anchors) {
+      const seedOffsets = [0, -88, 88, -176, 176, -264, 264, -352, 352, -440, 440];
+      for (const seedOffset of seedOffsets) {
+        const seed = frontage.chainage + seedOffset;
+        if (seed < 2 || seed > frontage.length - 2) continue;
+        const backward = seed, forward = frontage.length - seed;
+        const canCenter = backward >= count * 20 && forward >= count * 20;
+        const direction: -1 | 1 = forward >= backward ? 1 : -1;
+        const group: FrontageCandidate[] = [];
+        for (let index = 0; index < count; index++) {
+          const offset = canCenter ? (index - (count - 1) * .5) * 44 : direction * (18 + index * 44);
+          const candidate = candidateAtFrontage(frontage, seed + offset, index % 2 === 0 ? 1 : -1, 26 + (index % 3) * 2);
+          if (!candidate) continue;
+          const houseScale = scale * (.92 + (index % 4) * .035);
+          if (!frontageFootprintClear(candidate, 8.93 * houseScale, 11.8 * houseScale, 150)) continue;
+          if (!drivewayPlan(candidate.center, houseYaw(candidate.center, candidate.roadPoint), 5.5 * houseScale, candidate.roadPoint)) continue;
+          group.push(candidate);
+        }
+        const distanceCost = group.reduce((sum, candidate) => sum + localDistance(candidate.center, anchor), 0);
+        const score = group.length * 10000 - distanceCost - frontage.distance * .1;
+        if (score > bestScore) { bestScore = score; bestGroup = group; }
+      }
+    }
+    bestGroup.forEach((candidate, index) => {
+      placeHouse(candidate, scale * (.92 + (index % 4) * .035), label, 0, destinationId);
+    });
+    if (!bestGroup.length) {
+      // Try the nearest frontage in both directions as a last resort. Each lot
+      // still has to clear the complete footprint and driveway before creation.
+      const nearest = nearestFrontageAnchor(anchor);
+      if (!nearest) return;
+      for (let index = 0; index < count; index++) {
+        const candidate = anchoredCandidate(anchor, (index + 1) * 44, index % 2 === 0 ? 1 : -1, 28);
+        if (candidate) placeHouse(candidate, scale, label, 0, destinationId);
+      }
+    }
+  };
 
-  for (const [dt, ds, size, turn] of [
-    [-105, -55, .88, -.08], [-56, 57, .92, .04], [-5, -62, .94, .08],
-    [50, 48, 1.02, -.06], [106, -40, .9, .1],
-  ] as const) placeHouse({ t: hamlet.t + dt, s: hamlet.s + ds }, size, 'inland hamlet house', turn);
-  addExclusion(hamlet, 190);
-
-  placeHouse({ t: farmOne.t - 110, s: farmOne.s + 200 }, 1.16, 'farmstead farmhouse', .03);
-  placeBarn({ t: farmOne.t + 120, s: farmOne.s - 190 }, 'farmstead barn', -.03);
-  placeHouse({ t: farmTwo.t - 120, s: farmTwo.s + 200 }, 1.12, 'farmstead farmhouse', -.04);
-  placeBarn({ t: farmTwo.t + 120, s: farmTwo.s - 230 }, 'farmstead barn', .06);
-  addExclusion(farmOne, 145); addExclusion(farmTwo, 145);
+  // Core clusters now follow the actual settlement/farm frontage and turn each
+  // entrance toward a validated driveway instead of using fixed compass offsets.
+  const villageId = geography.settlements.find(item => item.kind === 'village')!.id;
+  const hamletId = geography.settlements.find(item => item.kind === 'hamlet')!.id;
+  const farmIds = geography.settlements.filter(item => item.kind === 'farm').map(item => item.id);
+  placeAnchoredCluster(village, 7, 'village house', .95, villageId);
+  placeAnchoredCluster(hamlet, 5, 'inland hamlet house', .91, hamletId);
+  const placeFarmstead = (anchor: LocalPoint, destinationId: string, houseScale: number, preferredSide: -1 | 1) => {
+    let best: { house: FrontageCandidate; barn: FrontageCandidate; score: number } | undefined;
+    const frontages = nearestFrontageAnchors(anchor).filter(item => item.distance <= 850).slice(0, 6);
+    for (const frontage of frontages) for (const offset of [0, -44, 44, -88, 88, -132, 132, -220, 220, -308, 308, -396, 396]) {
+      const station = frontage.chainage + offset;
+      const house = candidateAtFrontage(frontage, station - 28, preferredSide, 30);
+      const barn = candidateAtFrontage(frontage, station + 30, preferredSide === 1 ? -1 : 1, 34);
+      if (!house || !barn) continue;
+      const houseYaw = houseYawAt(house), barnYaw = houseYawAt(barn);
+      if (!frontageFootprintClear(house, 8.93 * houseScale, 11.8 * houseScale, 150)
+        || !drivewayPlan(house.center, houseYaw, 5.5 * houseScale, house.roadPoint)) continue;
+      if (!frontageFootprintClear(barn, 17.9, 13.4, 150)
+        || !drivewayPlan(barn.center, barnYaw, 6.45, barn.roadPoint)) continue;
+      const score = localDistance(house.center, anchor) + localDistance(barn.center, anchor) + frontage.distance * .2;
+      if (!best || score < best.score) best = { house, barn, score };
+    }
+    if (!best) return;
+    placeHouse(best.house, houseScale, 'farmstead farmhouse', 0, destinationId);
+    placeBarn(best.barn, 'farmstead barn', 0, destinationId);
+  };
+  const houseYawAt = (candidate: Pick<FrontageCandidate, 'center' | 'roadPoint'>) => houseYaw(candidate.center, candidate.roadPoint);
+  placeFarmstead(farmOne, farmIds[0], 1.16, 1);
+  placeFarmstead(farmTwo, farmIds[1], 1.12, -1);
+  const frontageRoads = geography.roads as unknown as Array<typeof roadPaths[number]['road'] & { frontage?: 'settlement' | 'rural' | 'none' }>;
+  const lotOpportunities = generateRoadFrontageCandidates(frontageRoads, campaignSeed(campaign.id), { setback: 27 });
+  const candidateFootprintRadius = Math.hypot(4.45, 6.3);
+  const fieldBoundaries = fieldSpecs.map(field => ({ field, boundary: fieldBoundary(field) }));
+  const fieldClear = (candidate: FrontageCandidate, drive: DrivewayPlan) => {
+    const tangent = candidate.tangent, normal = { t: -tangent.s, s: tangent.t };
+    const footprint = [
+      { along: -4.45, across: -6.3 }, { along: 4.45, across: -6.3 },
+      { along: 4.45, across: 4.7 }, { along: -4.45, across: 4.7 },
+    ].map(({ along: a, across: b }) => ({ t: candidate.center.t + tangent.t * a + normal.t * b, s: candidate.center.s + tangent.s * a + normal.s * b }));
+    return fieldBoundaries.every(({ boundary }) => {
+      const nearField = [...footprint, candidate.center, ...drive.points].some(point => pointInPolygon(point, boundary)
+        || boundary.some((vertex, index) => pointToLocalSegment(point, vertex, boundary[(index + 1) % boundary.length]) < 12));
+      return !nearField;
+    });
+  };
+  const clearFrontageLot = (candidate: FrontageCandidate) => {
+    if (!frontageFootprintClear(candidate, 8.9, 12.6, 150)) return false;
+    const world = toWorld(candidate.center);
+    if (structureColliders.some(item => distance(world, { x: item.x, z: item.z }) < candidateFootprintRadius + Math.hypot(item.halfWidth, item.halfLength) + 8)) return false;
+    if (treeColliders.some(item => distance(world, { x: item.x, z: item.z }) < candidateFootprintRadius + item.radius + 5)) return false;
+    if (destinations.some(destination => localDistance(destination.position, candidate.center) < (destination.kind === 'response' || destination.kind === 'gate' ? 110 : 78))) return false;
+    const yaw = houseYaw(candidate.center, candidate.roadPoint);
+    const access = drivewayPlan(candidate.center, yaw, 4, candidate.roadPoint);
+    return access !== null && fieldClear(candidate, access);
+  };
+  const frontageLots = selectSpacedFrontageCandidates(lotOpportunities, clearFrontageLot, 24, 118);
+  if (frontageLots.length) {
+    const bodyGeometry = new THREE.BoxGeometry(7.8, 2.8, 8);
+    const postGeometry = new THREE.BoxGeometry(.24, 1.15, .24);
+    const doorGeometry = new THREE.BoxGeometry(1.1, 2.05, .12);
+    const windowGeometry = new THREE.BoxGeometry(1.25, .92, .1);
+    const stepGeometry = new THREE.BoxGeometry(2.6, .22, 1.5);
+    const roofGeometry = new THREE.BufferGeometry();
+    roofGeometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      -4.45, 3.9, -4.7, 0, 5.35, -4.7, 4.45, 3.9, -4.7,
+      -4.45, 3.9, 4.7, 0, 5.35, 4.7, 4.45, 3.9, 4.7,
+    ], 3));
+    roofGeometry.setIndex([0, 3, 4, 0, 4, 1, 1, 4, 5, 1, 5, 2, 0, 1, 2, 3, 5, 4]);
+    roofGeometry.computeVertexNormals();
+    const bodyMesh = new THREE.InstancedMesh(bodyGeometry, wall, frontageLots.length);
+    const postMesh = new THREE.InstancedMesh(postGeometry, wood, frontageLots.length * 4);
+    const roofMesh = new THREE.InstancedMesh(roofGeometry, roof, frontageLots.length);
+    const doorMesh = new THREE.InstancedMesh(doorGeometry, dark, frontageLots.length);
+    const windowMesh = new THREE.InstancedMesh(windowGeometry, glass, frontageLots.length * 2);
+    const stepMesh = new THREE.InstancedMesh(stepGeometry, wood, frontageLots.length * 3);
+    for (const [mesh, name] of [
+      [bodyMesh, 'Roadside cottage walls'], [postMesh, 'Roadside cottage support posts'],
+      [roofMesh, 'Roadside cottage roofs'], [doorMesh, 'Roadside cottage doors'],
+      [windowMesh, 'Roadside cottage windows'], [stepMesh, 'Roadside cottage entry steps'],
+    ] as const) {
+      mesh.name = name; mesh.castShadow = true; mesh.receiveShadow = true;
+    }
+    const baseObject = new THREE.Object3D(), partObject = new THREE.Object3D();
+    const matrixFor = (world: Point, ground: number, yaw: number, local: [number, number, number]) => {
+      baseObject.position.set(world.x, ground, world.z); baseObject.rotation.set(0, yaw, 0); baseObject.scale.set(1, 1, 1); baseObject.updateMatrix();
+      partObject.position.set(...local); partObject.rotation.set(0, 0, 0); partObject.scale.set(1, 1, 1); partObject.updateMatrix();
+      return baseObject.matrix.clone().multiply(partObject.matrix);
+    };
+    frontageLots.forEach((candidate, index) => {
+      const world = toWorld(candidate.center), ground = groundAt(world.x, world.z), yaw = houseYaw(candidate.center, candidate.roadPoint);
+      const access = drivewayPlan(candidate.center, yaw, 5.9, candidate.roadPoint);
+      if (!access) throw new Error(`Validated roadside cottage lost its driveway on ${candidate.roadId}`);
+      bodyMesh.setMatrixAt(index, matrixFor(world, ground, yaw, [0, 2.55, 0]));
+      for (const [postIndex, x, z] of [[0, -3.2, -3.5], [1, 3.2, -3.5], [2, -3.2, 3.5], [3, 3.2, 3.5]] as const) {
+        postMesh.setMatrixAt(index * 4 + postIndex, matrixFor(world, ground, yaw, [x, .575, z]));
+      }
+      roofMesh.setMatrixAt(index, matrixFor(world, ground, yaw, [0, 0, 0]));
+      doorMesh.setMatrixAt(index, matrixFor(world, ground, yaw, [0, 2.05, -4.08]));
+      windowMesh.setMatrixAt(index * 2, matrixFor(world, ground, yaw, [-2.35, 2.9, -4.08]));
+      windowMesh.setMatrixAt(index * 2 + 1, matrixFor(world, ground, yaw, [2.35, 2.9, -4.08]));
+      stepMesh.setMatrixAt(index * 3, matrixFor(world, ground, yaw, [0, .16, -5.55]));
+      stepMesh.setMatrixAt(index * 3 + 1, matrixFor(world, ground, yaw, [0, .48, -4.95]));
+      stepMesh.setMatrixAt(index * 3 + 2, matrixFor(world, ground, yaw, [0, 1.05, -4.25]));
+      const yawAbsCos = Math.abs(Math.cos(yaw)), yawAbsSin = Math.abs(Math.sin(yaw));
+      const footprintCenterZ = -.8;
+      structureColliders.push({
+        x: world.x + Math.sin(yaw) * footprintCenterZ,
+        z: world.z + Math.cos(yaw) * footprintCenterZ,
+        halfWidth: yawAbsCos * 4.45 + yawAbsSin * 5.5,
+        halfLength: yawAbsSin * 4.45 + yawAbsCos * 5.5,
+        bottom: ground, top: ground + 5.35,
+        label: `Roadside frontage cottage ${candidate.roadId} ${Math.round(candidate.chainage)}`,
+      });
+      addBuildingFootprint(candidate.center, 8.9, 12.6);
+      commitDriveway(access);
+      buildingCount++;
+    });
+    for (const mesh of [bodyMesh, postMesh, roofMesh, doorMesh, windowMesh, stepMesh]) {
+      mesh.instanceMatrix.needsUpdate = true;
+      root.add(mesh);
+    }
+  }
 
   if (drivewayIndices.length) {
     const geometry = new THREE.BufferGeometry();
@@ -795,51 +1058,82 @@ export function createLandUse(scene: THREE.Scene, campaign: Campaign, mission: M
       && structureClear(local)
       && occupied.every(site => localDistance(site, local) > 45));
   };
-  const termini = getCampaignRoadTermini(geography.roads).filter(terminus =>
-    // The settlement anchors already have a visible building cluster.
-    geography.settlements.every(settlement => localDistance(settlement.position, terminus.position) > 210));
-  for (const terminus of termini) {
+  // Response spurs end at a staffed fireground; rural buildings belong at the other termini.
+  for (const terminus of roadEndTermini) {
+    const terminalRoad = roadPaths.find(item => item.road.id === terminus.roadId);
+    if (!terminalRoad) continue;
+    const endPoints = terminalRoad.points;
+    const tangentA = terminus.end === 'end' ? endPoints.at(-2)! : endPoints[1];
+    const tangentB = terminus.position;
+    const tangentLength = Math.hypot(tangentB.t - tangentA.t, tangentB.s - tangentA.s) || 1;
+    const outward = { t: (tangentB.t - tangentA.t) / tangentLength, s: (tangentB.s - tangentA.s) / tangentLength };
+    const turningPath = [
+      { t: terminus.position.t - outward.t * 10, s: terminus.position.s - outward.s * 10 },
+      { t: terminus.position.t + outward.t * 6, s: terminus.position.s + outward.s * 6 },
+    ];
+    makeBurnableRoadMesh(ribbonGeometry(turningPath, 14.5, context.fromLocal, groundAt, .12), trackEdgeMaterial,
+      `Rural road-end turning bay shoulder ${terminus.roadId}`);
+    makeBurnableRoadMesh(ribbonGeometry(turningPath, 11.5, context.fromLocal, groundAt, .22), trackMaterial,
+      `Rural road-end turning bay ${terminus.roadId}`);
+    const candidateFor = (center: LocalPoint): FrontageCandidate => {
+      const dx = terminus.position.t - center.t, ds = terminus.position.s - center.s;
+      const length = Math.hypot(dx, ds) || 1;
+      return { roadId: terminus.roadId, kind: terminus.kind, chainage: 0,
+        center, roadPoint: terminus.position,
+        tangent: { t: -ds / length, s: dx / length }, side: 1, score: 0 };
+    };
     let pair: { site: LocalPoint; secondSite: LocalPoint } | undefined;
-    for (const site of endpointCandidates(terminus.position, 68, terminalSites)) {
-      const secondSite = endpointCandidates(terminus.position, 68, [...terminalSites, site])[0];
-      if (secondSite) {
+    const candidates = endpointCandidates(terminus.position, 68, terminalSites);
+    for (const site of candidates) {
+      const houseCandidate = candidateFor(site);
+      const candidateYaw = houseYaw(site, terminus.position);
+      if (!frontageFootprintClear(houseCandidate, 8.93 * .76, 11.8 * .76, 180)
+        || !drivewayPlan(site, candidateYaw, 5.5 * .76, terminus.position)) continue;
+      for (const secondSite of endpointCandidates(terminus.position, 68, [...terminalSites, site])) {
+        const barnCandidate = candidateFor(secondSite);
+        const barnYaw = houseYaw(secondSite, terminus.position);
+        if (!frontageFootprintClear(barnCandidate, 17.9, 13.4, 180)
+          || !drivewayPlan(secondSite, barnYaw, 6.45, terminus.position)) continue;
         pair = { site, secondSite };
         break;
       }
+      if (pair) break;
     }
     if (!pair) throw new Error(`Could not place the road-end asset cluster for ${terminus.roadId} (${terminus.end}) in ${campaign.id}`);
     const { site, secondSite } = pair;
+    const houseCandidate = candidateFor(site), barnCandidate = candidateFor(secondSite);
+    const houseYawAtEnd = houseYaw(site, terminus.position), barnYawAtEnd = houseYaw(secondSite, terminus.position);
+    if (!frontageFootprintClear(houseCandidate, 8.93 * .76, 11.8 * .76, 180)
+      || !frontageFootprintClear(barnCandidate, 17.9, 13.4, 180)) {
+      throw new Error(`Road-end buildings overlap an unsafe footprint at ${terminus.roadId} in ${campaign.id}`);
+    }
+    const houseAccess = drivewayPlan(site, houseYawAtEnd, 5.5 * .76, terminus.position);
+    if (!houseAccess) throw new Error(`Road-end cottage has no connected driveway at ${terminus.roadId} in ${campaign.id}`);
     const siteWorld = toWorld(site);
-    makeStiltHouse(root, siteWorld, groundAt(siteWorld.x, siteWorld.z), yawT, .76, materials,
+    makeStiltHouse(root, siteWorld, groundAt(siteWorld.x, siteWorld.z), houseYawAtEnd, .76, materials,
       `Road-end ${terminus.roadId} ${terminus.end} cottage`, structureColliders);
-    addExclusion(site, 26);
+    addBuildingFootprint(site, 8.93 * .76, 11.8 * .76);
+    commitDriveway(houseAccess);
     buildingCount++;
 
     const secondWorld = toWorld(secondSite);
-    makeBarn(root, secondWorld, groundAt(secondWorld.x, secondWorld.z), yawT + .05, materials,
+    const barnAccess = drivewayPlan(secondSite, barnYawAtEnd, 6.45, terminus.position);
+    if (!barnAccess) throw new Error(`Road-end equipment shed has no connected driveway at ${terminus.roadId} in ${campaign.id}`);
+    makeBarn(root, secondWorld, groundAt(secondWorld.x, secondWorld.z), barnYawAtEnd, materials,
       `Road-end ${terminus.roadId} ${terminus.end} equipment shed`, structureColliders);
-    addExclusion(secondSite, 38);
+    addBuildingFootprint(secondSite, 17.9, 13.4);
+    commitDriveway(barnAccess);
     buildingCount++;
-    // Each working site has a visible arrival route, rather than buildings
-    // sitting in an unconnected clearing beyond the end of a track.
-    for (const [destination, setback] of [[site, 7], [secondSite, 12]] as const) {
-      const length = localDistance(terminus.position, destination);
-      const fraction = Math.max(0, (length - setback) / length);
-      const drive = sampleRoad([terminus.position, {
-        t: terminus.position.t + (destination.t - terminus.position.t) * fraction,
-        s: terminus.position.s + (destination.s - terminus.position.s) * fraction,
-      }], 4);
-      makeBurnableRoadMesh(ribbonGeometry(drive, 4.2, context.fromLocal, groundAt, .12), trackEdgeMaterial, 'Road-end driveway shoulder');
-      makeBurnableRoadMesh(ribbonGeometry(drive, 2.5, context.fromLocal, groundAt, .22), trackMaterial, 'Road-end driveway');
-      for (const point of drive) addRoadExclusion(point, 8);
-      trackLengthM += length - setback;
-    }
     terminalSites.push(site);
     roadEndClusterCount++;
   }
 
   root.updateMatrixWorld(true);
-  const stats: LandUseStats = { roadLengthM, trackLengthM, fieldCount, buildingCount, bridgeCount, palmCount, roadEndClusterCount, drawCalls: 0, triangles: 0 };
+  const stats: LandUseStats = {
+    roadLengthM, trackLengthM, fieldCount, fieldIds: renderedFieldIds, buildingCount, bridgeCount, palmCount, roadEndClusterCount, drivewayCount,
+    destinationBuildingCounts: { ...destinationBuildingCounts }, destinationDrivewayCounts: { ...destinationDrivewayCounts },
+    drawCalls: 0, triangles: 0,
+  };
   root.traverse(object => {
     const mesh = object as THREE.Mesh;
     if (!mesh.isMesh && !(mesh as THREE.InstancedMesh).isInstancedMesh) return;

@@ -1,5 +1,5 @@
 import type { Mission } from '../types';
-import { CAMPAIGN_TERRAIN_ORIGIN } from '../content/terrainFrame';
+import { createJapanAirbaseFrameFromShore, isWithinJapanAirbaseSurfaceFootprint } from '../content/airbaseLayout';
 
 export type BurnSample = { severity: number; age: number; activity: number };
 export type BurnField = {
@@ -32,18 +32,8 @@ function noise(x: number, y: number, seed: number) {
 /** Paved/support footprints from world.ts, not its much broader tree clearance. */
 export function isBurnProtectedAirport(mission: Mission, x: number, z: number): boolean {
   if (!mission.shore) return false;
-  const dx = mission.shore.x - CAMPAIGN_TERRAIN_ORIGIN.x, dz = mission.shore.z - CAMPAIGN_TERRAIN_ORIGIN.z;
-  const length = Math.hypot(dx, dz) || 1;
-  const ux = dx / length, uz = dz / length;
-  const px = x - mission.shore.x, pz = z - mission.shore.z;
-  // Inverse of the support apron group's atan2(ux, uz) rotation.
-  const localX = px * uz - pz * ux, localZ = px * ux + pz * uz;
-  const pad = Math.abs(localX) < 38 && Math.abs(localZ) < 23;
-  const runway = localX > 210 && localX < 260 && localZ > -130 && localZ < 890;
-  const facilities = localX > -56 && localX < 226 && localZ > 40 && localZ < 160;
-  const taxiway = localX > 120 && localX < 238 &&
-    (Math.abs(localZ + 60) < 18 || Math.abs(localZ - 740) < 18);
-  return pad || runway || facilities || taxiway;
+  const frame = createJapanAirbaseFrameFromShore(mission.shore);
+  return isWithinJapanAirbaseSurfaceFootprint(frame, { x, z });
 }
 
 /** Authored visual history, not a spatial fire simulation or collision source. */

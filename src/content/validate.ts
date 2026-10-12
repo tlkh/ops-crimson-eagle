@@ -1,4 +1,5 @@
 import type { Campaign, CampaignId, Mission } from '../types';
+import { lakeRadiusBounds } from '../sim/lakeShape';
 
 const REQUIRED_CAMPAIGNS: CampaignId[] = ['sg_fictional_2026_10', 'jp_ketapang_2026_09'];
 const EARTHLY_SOURCE_CUTOFF = '2026-10-09';
@@ -68,19 +69,24 @@ function validateMission(campaign: Campaign, mission: Mission, index: number, is
     if (mission.date !== '2026-10-09') issues.push(`${path}: Singapore scenarios are dated 9 October 2026.`);
     if (mission.shore) issues.push(`${path}: Singapore sorties use the ship-centred layout without a shore handling stop.`);
     const shipToLake = distance(mission.ship, mission.lake);
-    if (shipToLake < 1400 || shipToLake > 1600) issues.push(`${path}: Singapore lake should be about 1.5 km from the ship in local gameplay space.`);
+    if (shipToLake < 1600 || shipToLake > 1800) issues.push(`${path}: Singapore lake should be about 1.7 km from the ship in local gameplay space.`);
   } else {
     if (!mission.shore || !isFinitePoint(mission.shore)) issues.push(`${path}: Japan scenarios require a shore handling waypoint.`);
     else {
       const shipToShore = distance(mission.ship, mission.shore);
       const shoreToLake = distance(mission.shore, mission.lake);
       if (shipToShore < 350 || shipToShore > 500) issues.push(`${path}: shore point should be 350–500 m from the ship in local gameplay space.`);
-      if (shoreToLake < 1000 || shoreToLake > 1100) issues.push(`${path}: lake should be 1,000–1,100 m beyond the shore point in local gameplay space.`);
+      if (shoreToLake < 1200 || shoreToLake > 1300) issues.push(`${path}: lake should be 1,200–1,300 m beyond the shore point in local gameplay space.`);
     }
   }
 
   const fireToLake = distance(mission.fire, mission.lake);
-  if (fireToLake < 100 || fireToLake > 400) issues.push(`${path}: fire target should be 100–400 m from its lake in local gameplay space.`);
+  if (fireToLake < 400 || fireToLake > 520) issues.push(`${path}: fire target should be 400–520 m from its lake in local gameplay space.`);
+  if (Number.isFinite(mission.lake.radius) && mission.lake.radius > 0 &&
+      Number.isFinite(mission.fire.radius) && mission.fire.radius > 0 &&
+      fireToLake <= lakeRadiusBounds(campaign.id, mission.lake.radius).max + mission.fire.radius + 20) {
+    issues.push(`${path}: the full fire patch must clear the irregular lake shoreline by at least 20 m.`);
+  }
 }
 
 /** Return actionable errors before scenario content is loaded by the game. */

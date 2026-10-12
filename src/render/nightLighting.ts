@@ -1,12 +1,16 @@
-import { shipLandingLocalZ, shipLandingPoint } from '../sim/shipLanding';
+import { shipLandingPoint } from '../sim/shipLanding';
 import { campaignTerrainAnchor } from '../content/terrainFrame';
+import { createJapanAirbaseFrame } from '../content/airbaseLayout';
 import * as THREE from 'three';
 import type { Campaign, Mission, SimState } from '../types';
 import { updateAircraftLightEmission, type AircraftLightMounts } from './aircraftLighting';
-
-const DECK_Y = -2.55;
+import { createShipLightLayout } from './shipLayout';
 
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+const smoothstep = (edge0: number, edge1: number, value: number) => {
+  const t = clamp01((value - edge0) / (edge1 - edge0));
+  return t * t * (3 - 2 * t);
+};
 
 type EmissiveFixtures = {
   red: THREE.MeshStandardMaterial;
@@ -62,10 +66,7 @@ export function createNightLighting(
   dispose(): void;
 } {
   const japanese = campaign.id === 'jp_ketapang_2026_09';
-  const stern = japanese ? 40 : 35;
-  const shipLength = campaign.shipLength;
-  const shipWidth = campaign.shipWidth;
-  const shipStation = (fraction: number) => stern - shipLength + fraction * shipLength;
+  const shipLayout = createShipLightLayout(campaign);
   const landingPoint = shipLandingPoint(campaign, mission);
 
   const fixtures: EmissiveFixtures = {
@@ -114,29 +115,30 @@ export function createNightLighting(
   scene.add(shipGroup);
   fixtureGroups.push(shipGroup);
   ownedObjects.push(shipGroup);
-  const bridgeZ = japanese ? shipStation(0.392) : shipStation(0.292);
-  const bridgeX = japanese ? shipWidth * 0.27 : 0;
-  const bridgeTop = japanese ? DECK_Y + 9.55 : DECK_Y + 11.4;
-  const bridgeWing = japanese ? shipWidth * 0.19 : shipWidth * 0.37;
-  const bridgeFlood = new THREE.SpotLight('#ffe6bd', 0, 175, 0.78, 0.66, 2);
-  bridgeFlood.position.set(bridgeX + bridgeWing, bridgeTop, bridgeZ - (japanese ? 0 : 5));
-  bridgeFlood.target.position.set(0, DECK_Y + 0.18, shipLandingLocalZ(campaign));
-  shipGroup.add(bridgeFlood, bridgeFlood.target);
-  ownedObjects.push(bridgeFlood, bridgeFlood.target);
+  shipGroup.name = 'Ship navigation and deck lighting';
+  const shipFlood = new THREE.SpotLight('#fff0da', 0, 100, 0.78, 0.9, 2);
+  shipFlood.name = 'ship-deck-flood';
+  shipFlood.position.set(shipLayout.deckFlood.position.x, shipLayout.deckFlood.position.y, shipLayout.deckFlood.position.z);
+  shipFlood.target.position.set(shipLayout.deckFlood.target.x, shipLayout.deckFlood.target.y, shipLayout.deckFlood.target.z);
+  // Both local spots use one map allocation; only the selected spot casts in
+  // any frame, so shadow cost stays fixed through approach/recovery changes.
+  shipFlood.shadow = landingSpot.shadow;
+  shipFlood.castShadow = false;
+  shipFlood.shadow.mapSize.set(512, 512);
+  shipFlood.shadow.camera.near = 0.5;
+  shipFlood.shadow.camera.far = 105;
+  shipFlood.shadow.bias = -0.00035;
+  shipFlood.shadow.normalBias = 0.035;
+  shipGroup.add(shipFlood, shipFlood.target);
+  ownedObjects.push(shipFlood, shipFlood.target);
 
   // Red/green bridge wings, mast marker and discreet deck-edge lamps help
   // read the ship's orientation and the clear landing lane after sunset.
-  addLens(shipGroup, fixtures.red, bridgeX - bridgeWing, bridgeTop - 0.7, bridgeZ, 0.19);
-  addLens(shipGroup, fixtures.green, bridgeX + bridgeWing, bridgeTop - 0.7, bridgeZ, 0.19);
-  addLens(shipGroup, fixtures.white, japanese ? -1 : 0, japanese ? 21.2 : 24.6, japanese ? shipStation(0.445) : shipStation(0.395), 0.23);
-  const deckEdgeX = shipWidth * 0.5 - 0.9;
-  const edgeLampZ = japanese ? [-13, 2, 17, 31] : [-19, -4, 11, 26];
-  for (const z of edgeLampZ) {
-    for (const side of [-1, 1]) addLens(shipGroup, fixtures.amber, side * deckEdgeX, DECK_Y + 0.12, z, 0.105);
-  }
-  const bowZ = stern - shipLength + (japanese ? 9 : 8);
-  addLens(shipGroup, fixtures.red, -shipWidth * 0.47, -0.15, bowZ, 0.16);
-  addLens(shipGroup, fixtures.green, shipWidth * 0.47, -0.15, bowZ, 0.16);
+  addLens(shipGroup, fixtures.red, shipLayout.bridge.center.x - shipLayout.bridge.wingOffsetX, shipLayout.bridge.center.y, shipLayout.bridge.center.z, 0.19);
+  addLens(shipGroup, fixtures.green, shipLayout.bridge.center.x + shipLayout.bridge.wingOffsetX, shipLayout.bridge.center.y, shipLayout.bridge.center.z, 0.19);
+  addLens(shipGroup, fixtures.white, shipLayout.mastBeacon.x, shipLayout.mastBeacon.y, shipLayout.mastBeacon.z, 0.23);
+  for (const point of shipLayout.deckEdgeLamps) addLens(shipGroup, fixtures.amber, point.x, point.y, point.z, 0.105);
+  addLens(shipGroup, fixtures.white, shipLayout.deckFlood.position.x, shipLayout.deckFlood.position.y, shipLayout.deckFlood.position.z, 0.14);
 
   const routeTarget = mission.shore ?? mission.lake;
   const origin = campaignTerrainAnchor(campaign);
@@ -147,10 +149,12 @@ export function createNightLighting(
   const uz = routeZ / routeLength;
   const sx = -uz;
   const sz = ux;
-  const shoreAngle = Math.atan2(ux, uz);
+  const routeAngle = Math.atan2(ux, uz);
   const hasShore = Boolean(mission.shore);
   const shoreAnchor = mission.shore ?? mission.lake;
+  const shoreAngle = japanese && mission.shore ? createJapanAirbaseFrame(campaign, mission).heading : routeAngle;
   const shoreGroup = makeLightGroup(shoreAnchor, shoreAngle);
+  shoreGroup.name = 'Japan shore airfield lighting';
   shoreGroup.visible = hasShore;
   scene.add(shoreGroup);
   fixtureGroups.push(shoreGroup);
@@ -175,7 +179,8 @@ export function createNightLighting(
     x: origin.x + settlementT * ux + settlementS * sx,
     z: origin.z + settlementT * uz + settlementS * sz,
   };
-  const settlementGroup = makeLightGroup(settlementAnchor, shoreAngle);
+  const settlementGroup = makeLightGroup(settlementAnchor, routeAngle);
+  settlementGroup.name = 'Coastal settlement lighting';
   scene.add(settlementGroup);
   fixtureGroups.push(settlementGroup);
   ownedObjects.push(settlementGroup);
@@ -262,17 +267,24 @@ export function createNightLighting(
       landingSpot.target.position.copy(landingPosition).addScaledVector(landingDirection, Math.max(downRange, forwardRange));
       landingSpot.intensity = night * 14_000;
 
-      const nearShip = Math.hypot(state.position.x - landingPoint.x, state.position.z - landingPoint.z) < 105;
+      const shipDistance = Math.hypot(state.position.x - landingPoint.x, state.position.z - landingPoint.z);
+      const nearShip = shipDistance < 112;
       const shoreX = mission.shore?.x ?? mission.ship.x;
       const shoreZ = mission.shore?.z ?? landingPoint.z;
       const nearShore = hasShore && Math.hypot(state.position.x - shoreX, state.position.z - shoreZ) < 105;
       const landingPhase = state.phase === 'prepare' || state.phase === 'return' || state.phase === 'land' ||
         state.phase === 'shore_rig' || state.phase === 'shore_unrig' || state.phase === 'deck_rig';
-      const nightLanding = night > 0.58 && sunIntensity <= 0.05 && state.position.y < 24 &&
-        landingPhase && (nearShip || nearShore);
-      landingSpot.castShadow = nightLanding;
+      const darkFactor = smoothstep(0.08, 0.92, night);
+      const shipDeckPhase = state.phase === 'prepare' || state.phase === 'deck_rig' || state.phase === 'land';
+      const aircraftLandingMode = landingPhase && state.position.y < 24 && (nearShip || nearShore);
+      const aircraftDeckFade = shipDistance < 12 ? smoothstep(0, 3, state.position.y) : 1;
+      shipFlood.intensity = darkFactor * 8_000;
+      landingSpot.intensity = darkFactor * aircraftDeckFade * 14_000;
+      const darkSortie = darkFactor > 0.56 && sunIntensity <= 0.05;
+      const groundedAtShip = shipDeckPhase && shipDistance < 12 && state.position.y < 3;
+      shipFlood.castShadow = Boolean(darkSortie && groundedAtShip);
+      landingSpot.castShadow = Boolean(darkSortie && aircraftLandingMode && !shipFlood.castShadow);
 
-      bridgeFlood.intensity = night * 36_000;
       shoreFlood.intensity = hasShore ? night * 8_000 : 0;
       // Reuse the settlement light slot at the closer coastal practical.
       const nearCoast = coastalAnchor && Math.hypot(state.position.x - coastalAnchor.x, state.position.z - coastalAnchor.z) <
@@ -294,8 +306,9 @@ export function createNightLighting(
     },
     dispose() {
       for (const object of ownedObjects) object.removeFromParent();
-      landingSpot.shadow.map?.dispose();
+      landingSpot.shadow.dispose();
       landingSpot.shadow.map = null;
+      landingSpot.shadow.mapPass = null;
       const geometries = new Set<THREE.BufferGeometry>();
       const materials = new Set<THREE.Material>();
       for (const group of fixtureGroups) {

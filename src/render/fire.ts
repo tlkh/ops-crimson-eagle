@@ -27,8 +27,14 @@ function flameTexture() {
         const tongue = Math.max(0, 1 - Math.abs(u - axis) / taper);
         const body = tongue * (.75 + turbulence * .45) - v * .5;
         const edge = clamp((body - .10 + (turbulence - .5) * .45) * 2.5, 0, 1);
-        const border = Math.min(u, 1 - u, v, 1 - v);
-        const opacity = edge * edge * (3 - 2 * edge) * clamp(border * 24, 0, 1);
+        // A variable contact line keeps the foot of each flame from reading
+        // as the straight lower edge of a rectangular card in the chase view.
+        const foot = clamp(.026 + Math.pow(Math.abs(u * 2 - 1), 1.5) * .064
+          + (gridNoise(u * 19, variant * 2.7, 109) - .5) * .027
+          + Math.sin(u * 31 + variant * 1.7) * .009, .008, .12);
+        const footFade = clamp((v - foot) / .025, 0, 1);
+        const border = Math.min(u, 1 - u, 1 - v);
+        const opacity = edge * edge * (3 - 2 * edge) * clamp(border * 24, 0, 1) * footFade;
         const core = clamp(body * 1.15, 0, 1);
         const pixel = ((Math.floor(variant / 2) * tileHeight + y) * width + (variant % 2) * tileWidth + x) * 4;
         pixels[pixel] = 255;
@@ -213,11 +219,25 @@ function makeInstancedParticles(
 
 export type FireSite = { x: number; z: number; severity: number; age: number; activity: number };
 type WeightedFireSite = FireSite & { index: number; weight: number; radial: number };
-type Flame = FireSite & { y: number; width: number; height: number; phase: number; color: THREE.Color };
+type Flame = FireSite & { width: number; height: number; phase: number; color: THREE.Color };
 type SmokeSource = FireSite & { y: number; residualOnly: boolean; residual: number };
 type SmokePuff = { source: number; phase: number; size: number; height: number; tint: THREE.Color; low?: boolean };
 type Ember = { x: number; z: number; y: number; phase: number; size: number; activity: number };
 type SteamPuff = { x: number; z: number; y: number; phase: number; size: number; tint: THREE.Color; eligible: boolean };
+
+/** Upright flame card whose lower mesh edge remains on its sampled ground. */
+export function setGroundedFlameTransform(
+  object: THREE.Object3D,
+  x: number, groundY: number, z: number,
+  width: number, height: number,
+  cameraPosition?: THREE.Vector3,
+) {
+  object.position.set(x, groundY + height * .5, z);
+  const dx = (cameraPosition?.x ?? x) - x, dz = (cameraPosition?.z ?? z + 1) - z;
+  object.rotation.set(0, dx * dx + dz * dz > .0001 ? Math.atan2(dx, dz) : 0, 0);
+  object.scale.set(width, height, 1);
+  object.updateMatrix();
+}
 
 const FIELD_SAMPLE_LIMIT = 96;
 
@@ -349,7 +369,6 @@ export function createFire(
     const site = flameSites[i] ?? { x: mission.fire.x, z: mission.fire.z, severity: 0, age: 0, activity: 0 };
     flames.push({
       ...site,
-      y: terrainHeight(site.x, site.z) + .7,
       width: 4 + rand() * 6,
       height: 3 + rand() * 7,
       phase: rand() * TAU,
@@ -493,10 +512,13 @@ export function createFire(
         const localActivity = flame.activity > 0 ? activity * (.2 + .8 * flame.activity) : 0;
         const pulse = .86 + .13 * Math.sin(timeSec * 5.7 + flame.phase) + .08 * Math.sin(timeSec * 9.9 + flame.phase * 2.3);
         const stretch = .55 + localActivity * .72;
-        dummy.position.set(flame.x + Math.sin(timeSec * 2.1 + flame.phase) * 1.8, flame.y + flame.height * (.45 + localActivity * .78) * pulse * .5, flame.z);
-        dummy.quaternion.copy(facing);
-        dummy.scale.set(flame.width * stretch * pulse, flame.height * (.45 + localActivity * .78) * pulse, 1);
-        dummy.updateMatrix();
+        const flameX = flame.x + Math.sin(timeSec * 2.1 + flame.phase) * 1.8;
+        setGroundedFlameTransform(
+          dummy,
+          flameX, terrainHeight(flameX, flame.z) + .03, flame.z,
+          flame.width * stretch * pulse, flame.height * (.45 + localActivity * .78) * pulse,
+          camera?.position,
+        );
         flameParticles.mesh.setMatrixAt(i, dummy.matrix);
         flameParticles.opacity.setX(i, localActivity * .9 * nightGlow);
       }

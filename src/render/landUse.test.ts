@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { campaigns } from '../content';
 import { getCampaignGeography, getCampaignRoadTermini, sampleRoad } from '../content/geography';
+import { getCampaignSites } from '../content/geographySites';
 import { renderedTerrainHeight, terrainHeight } from '../sim/collision';
 import { createCoastalSampler } from './coastalSampling';
 import { createLandUse, type LandUseContext } from './landUse';
@@ -37,11 +38,11 @@ describe('connected rural land use', () => {
       const first = createLandUse(scene, campaign, referenceMission, context);
       const secondScene = new THREE.Scene();
       const second = createLandUse(secondScene, campaign, referenceMission, context);
-      const outerRoad = geography.roads.find(road => road.id === 'outer-county-road')!;
-      const outerPoint = outerRoad.points.at(-1)!;
-      const outerWorld = context.fromLocal(outerPoint.t, outerPoint.s);
-      expect(first.exclusionZones.some(zone => Math.hypot(outerWorld.x - zone.x, outerWorld.z - zone.z) < zone.radius + 8)).toBe(true);
-      expect(first.burnExclusionZones.some(zone => Math.hypot(outerWorld.x - zone.x, outerWorld.z - zone.z) < zone.radius + 8)).toBe(false);
+      const sampleMainRoad = geography.roads.find(road => road.id === 'main-paved')!;
+      const samplePoint = sampleMainRoad.points[Math.floor(sampleMainRoad.points.length * .62)];
+      const sampleWorld = context.fromLocal(samplePoint.t, samplePoint.s);
+      expect(first.exclusionZones.some(zone => Math.hypot(sampleWorld.x - zone.x, sampleWorld.z - zone.z) < zone.radius + 8)).toBe(true);
+      expect(first.burnExclusionZones.some(zone => Math.hypot(sampleWorld.x - zone.x, sampleWorld.z - zone.z) < zone.radius + 8)).toBe(false);
       first.applyBurnField({
         bounds: { minX: -10000, maxX: 10000, minZ: -10000, maxZ: 10000 },
         size: 1,
@@ -50,15 +51,26 @@ describe('connected rural land use', () => {
       });
       expect(first.stats.roadLengthM).toBeGreaterThan(2500);
       expect(first.stats.trackLengthM).toBeGreaterThan(500);
-      expect(first.stats.fieldCount).toBeGreaterThanOrEqual(5);
       expect(first.stats.buildingCount).toBeGreaterThanOrEqual(12);
+      expect(first.stats.drivewayCount).toBe(first.stats.buildingCount);
+      for (const settlement of geography.settlements) {
+        expect(first.stats.destinationBuildingCounts[settlement.id], `${settlement.id} buildings`).toBeGreaterThan(0);
+        expect(first.stats.destinationDrivewayCounts[settlement.id], `${settlement.id} driveways`).toBe(
+          first.stats.destinationBuildingCounts[settlement.id],
+        );
+      }
       expect(first.stats.bridgeCount).toBeGreaterThan(0);
       expect(first.stats.palmCount).toBeGreaterThan(0);
-      const unservedTermini = getCampaignRoadTermini(geography.roads).filter(terminus =>
-        geography.settlements.every(settlement => Math.hypot(
+      const unservedTermini = getCampaignRoadTermini(geography.roads).filter(terminus => {
+        const road = geography.roads.find(item => item.id === terminus.roadId)!;
+        return road.frontage !== 'none' && !terminus.roadId.startsWith('response-access-')
+          && geography.settlements.every(settlement => Math.hypot(
           settlement.position.t - terminus.position.t,
           settlement.position.s - terminus.position.s,
-        ) > 210));
+          ) > 210)
+          && !geography.destinations.some(destination => ['field', 'coastal', 'gate', 'response'].includes(destination.kind)
+            && Math.hypot(destination.position.t - terminus.position.t, destination.position.s - terminus.position.s) < 110);
+      });
       expect(first.stats.roadEndClusterCount).toBe(unservedTermini.length);
       for (const terminus of unservedTermini) {
         const prefix = `Road-end ${terminus.roadId} ${terminus.end}`;
@@ -70,7 +82,14 @@ describe('connected rural land use', () => {
         }
       }
       expect(first.treeColliders.length).toBeGreaterThan(20);
+      expect(first.structureColliders.filter(item => item.label.startsWith('Roadside frontage cottage')).length).toBeLessThanOrEqual(24);
       expect(first.exclusionZones.length).toBeGreaterThan(100);
+      // Settlements now clear individual property and driveway footprints. A
+      // centroid-sized circle here would erase both roadside tree rows.
+      for (const settlement of geography.settlements) {
+        const anchor = context.fromLocal(settlement.position.t, settlement.position.s);
+        expect(first.exclusionZones.some(zone => Math.hypot(anchor.x - zone.x, anchor.z - zone.z) < 4 && zone.radius > 35), settlement.id).toBe(false);
+      }
       expect(first.structureColliders.every(item => item.top > item.bottom)).toBe(true);
 
       const legDistance = (x: number, z: number, [start, end]: readonly [
@@ -116,16 +135,31 @@ describe('connected rural land use', () => {
         if (object instanceof THREE.Group && object.name.includes('drainage bridge')) bridgeGroups.push(object);
       });
       expect(roadMeshes.length).toBeGreaterThan(geography.roads.length);
+      const junctionSurfaces: THREE.Mesh[] = [];
+      const junctionShoulders: THREE.Mesh[] = [];
+      scene.traverse(object => {
+        if (!(object instanceof THREE.Mesh)) return;
+        if (/^Junction .* road surface$/.test(object.name)) junctionSurfaces.push(object);
+        if (/^Junction .* shoulder apron$/.test(object.name)) junctionShoulders.push(object);
+      });
+      const drawableJunctions = geography.junctions.filter(junction => junction.arms.length >= 2);
+      expect(junctionSurfaces).toHaveLength(drawableJunctions.length);
+      expect(junctionShoulders).toHaveLength(drawableJunctions.length);
+      for (const junction of [...junctionSurfaces, ...junctionShoulders]) {
+        expect(junction.geometry.getIndex()!.count).toBeGreaterThan(0);
+        const normals = junction.geometry.getAttribute('normal');
+        expect(Array.from({ length: normals.count }, (_, index) => normals.getY(index)).reduce((sum, y) => sum + y, 0) / normals.count).toBeGreaterThan(.5);
+      }
       expect(bridgeGroups).toHaveLength(first.stats.bridgeCount);
       for (const mesh of roadMeshes) {
         const positions = mesh.geometry.getAttribute('position');
-        expect(positions.count).toBeGreaterThan(40);
+        expect(positions.count, mesh.name).toBeGreaterThan(4);
         for (let i = 0; i < positions.count; i++) {
           expect(positions.getY(i)).toBeGreaterThan(-2);
           if (!mesh.name.includes('Bridge deck and ramp')) {
             const local = sampler.toLocal(positions.getX(i), positions.getZ(i));
             const riverClearance = Math.abs(local.z - context.river.centerS(local.x));
-            expect(riverClearance).toBeGreaterThan(context.river.halfWidth * 1.22);
+            expect(riverClearance, `${mesh.name} river clearance at ${local.x.toFixed(1)},${local.z.toFixed(1)}`).toBeGreaterThan(context.river.halfWidth * 1.22);
           }
         }
         const normals = mesh.geometry.getAttribute('normal');
@@ -162,6 +196,25 @@ describe('connected rural land use', () => {
         const world = context.fromLocal(local.t, local.s);
         expect(first.exclusionZones.some(zone => Math.hypot(world.x - zone.x, world.z - zone.z) < zone.radius)).toBe(true);
       }
+
+      const fields = getCampaignSites(campaign).fields;
+      expect(new Set(first.stats.fieldIds).size).toBe(first.stats.fieldCount);
+      for (const field of fields) {
+        expect(first.stats.fieldIds, `${field.id} rendered plot`).toContain(field.id);
+        expect(geography.destinations.some(destination => destination.id === field.id && destination.kind === 'field'
+          && Math.hypot(destination.position.t - field.entrance.t, destination.position.s - field.entrance.s) < 1), `${field.id} graph destination`).toBe(true);
+        const entranceDistance = Math.min(...geography.roads.flatMap(road => {
+          const points = sampleRoad(road.points, 8);
+          return points.slice(1).map((point, index) => {
+            const a = points[index], dt = point.t - a.t, ds = point.s - a.s;
+            const lengthSq = dt * dt + ds * ds;
+            const u = lengthSq ? Math.max(0, Math.min(1, ((field.entrance.t - a.t) * dt + (field.entrance.s - a.s) * ds) / lengthSq)) : 0;
+            return Math.hypot(field.entrance.t - a.t - u * dt, field.entrance.s - a.s - u * ds);
+          });
+        }));
+        expect(entranceDistance, `${field.id} road connection`).toBeLessThan(1);
+      }
+      expect(first.stats.fieldCount).toBeGreaterThanOrEqual(5);
 
       const watchedMesh = roadMeshes.find(mesh => mesh.name.includes('road surface'))!;
       const burnedRoadColors = watchedMesh.geometry.getAttribute('color');

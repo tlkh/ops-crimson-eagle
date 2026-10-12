@@ -8,7 +8,10 @@ import { MissionRadioDirector } from './missionRadio';
 import type { MusicTrackId } from './music';
 import type { Campaign, CampaignId, FlightCommand, Mission, SimState } from './types';
 import { WORLD_REVISION } from './worldRevision';
+import { clearRelocatedObjectiveActions } from './sim/checkpoint';
 import { createKeyboardResponse } from './keyboardResponse';
+import { isResumableCheckpoint } from './checkpointSelection';
+import { flightOverlayShortcut, nextFlightOverlay, type FlightOverlay } from './ui/flightOverlay';
 import './style.css';
 import './ui/menu.css';
 import './ui/flightRefinement.css';
@@ -26,8 +29,8 @@ let state: SimState | null = null;
 let campaign: Campaign | null = null;
 let mission: Mission | null = null;
 let scene: ReturnType<typeof createScene> | null = null;
-let paused = true;
-let mapOpen = false;
+let flightOverlay: FlightOverlay = 'pause';
+const isPaused = () => flightOverlay !== 'flight';
 let accumulator = 0;
 let lastFrame = performance.now();
 let lastSaveTime = 0;
@@ -39,7 +42,7 @@ let voicePaused = false;
 let radioReminderOnResume = false;
 
 function syncVoicePause() {
-  const next = paused && state?.outcome === 'none';
+  const next = isPaused() && state?.outcome === 'none';
   if (next !== voicePaused) {
     audio.setVoicePaused(next);
     voicePaused = next;
@@ -55,7 +58,7 @@ const ui = createUI(root, {
     audio.setVoiceEnabled(enabled);
     if (!enabled) radioReminderOnResume = false;
     if (enabled && state && campaign && mission && state.outcome === 'none') {
-      if (paused) radioReminderOnResume = true;
+      if (isPaused()) radioReminderOnResume = true;
       else radio.reset(state, campaign, mission);
     }
   },
@@ -79,6 +82,22 @@ function clearInput() {
   keyboardResponse.reset();
 }
 
+function setFlightOverlay(next: FlightOverlay) {
+  clearInput();
+  if (flightOverlay === next) return;
+  const wasPaused = isPaused();
+  flightOverlay = next;
+  accumulator = 0;
+  lastFrame = performance.now();
+  syncVoicePause();
+  ui.setFlightOverlay(next);
+  if (wasPaused && !isPaused() && radioReminderOnResume && state && campaign && mission) {
+    radio.reset(state, campaign, mission);
+    radioReminderOnResume = false;
+  }
+  if (!wasPaused && isPaused()) queueSave();
+}
+
 async function selectMission(campaignId: CampaignId, missionId: string) {
   queueSave();
   const nextCampaign = getCampaign(campaignId);
@@ -86,7 +105,7 @@ async function selectMission(campaignId: CampaignId, missionId: string) {
   if (!nextCampaign || !nextMission) return;
   await saving.catch(() => undefined);
   const saved = await loadCheckpoint(campaignId);
-  let nextState = saved?.missionId === missionId && saved.phase !== 'debrief' && saved.phase !== 'failed'
+  let nextState = isResumableCheckpoint(saved, campaignId, missionId)
     ? saved : createSim(nextCampaign, nextMission);
   const sceneHost = ui.getSceneHost();
   const previousSceneNodes = new Set(sceneHost.childNodes);
@@ -102,6 +121,7 @@ async function selectMission(campaignId: CampaignId, missionId: string) {
   scene?.dispose();
   scene = nextScene;
   if (nextState === saved && saved?.worldRevision !== WORLD_REVISION) {
+    clearRelocatedObjectiveActions(nextState, nextMission);
     // Scene construction registers the exact terrain and solid scenery for the
     // mission before the legacy save is checked. Only an obstructed sortie is
     // restarted; completed campaign progress is stored separately.
@@ -118,8 +138,6 @@ async function selectMission(campaignId: CampaignId, missionId: string) {
   mission = nextMission;
   state = nextState;
   clearInput();
-  paused = false;
-  mapOpen = false;
   accumulator = 0;
   lastFrame = performance.now();
   lastPhase = state.phase;
@@ -128,11 +146,12 @@ async function selectMission(campaignId: CampaignId, missionId: string) {
   radio.reset(state, campaign, mission);
   radioReminderOnResume = false;
   ui.showGame(state, campaign, mission, estimateLandingFuel(state, campaign, mission));
-  ui.setPaused(false);
+  setFlightOverlay('flight');
 }
 
 async function act(name: string) {
   if (name === 'menu') {
+    setFlightOverlay('pause');
     radio.clear();
     radioReminderOnResume = false;
     audio.setVoiceMission(null);
@@ -140,7 +159,6 @@ async function act(name: string) {
     audio.update(null, false);
     queueSave();
     await saving.catch(() => undefined);
-    paused = true;
     clearInput();
     scene?.dispose(); scene = null;
     state = null; campaign = null; mission = null;
@@ -153,26 +171,20 @@ async function act(name: string) {
     await saving.catch(() => undefined);
     await clearCheckpoint(campaign.id);
     state = createSim(campaign, mission);
-    paused = false; mapOpen = false; clearInput(); accumulator = 0;
+    clearInput(); accumulator = 0;
     audio.setVoiceMission(campaign.id);
     syncVoicePause();
     radio.reset(state, campaign, mission);
     radioReminderOnResume = false;
-    ui.setPaused(false);
+    ui.showGame(state, campaign, mission, estimateLandingFuel(state, campaign, mission));
+    setFlightOverlay('flight');
     return;
   }
-  if (name === 'map') { mapOpen = !mapOpen; paused = mapOpen; clearInput(); syncVoicePause(); return; }
-  if (name === 'togglePause' || name === 'resume') {
-    paused = name === 'resume' ? false : !paused;
-    mapOpen = false;
-    clearInput();
-    syncVoicePause();
-    if (!paused && radioReminderOnResume) { radio.reset(state, campaign, mission); radioReminderOnResume = false; }
-    ui.setPaused(paused);
-    if (paused) queueSave();
+  if (name === 'map' || name === 'togglePause' || name === 'resume' || name === 'escape') {
+    setFlightOverlay(nextFlightOverlay(flightOverlay, name));
     return;
   }
-  if (paused) return;
+  if (isPaused()) return;
   if (name === 'drop') command.drop = true;
   if (name === 'fetch') command.fetch = true;
   if (name === 'action') command.action = true;
@@ -182,12 +194,13 @@ async function act(name: string) {
 window.addEventListener('keydown', event => {
   const key = event.key.toLowerCase();
   if (!state || state.phase === 'debrief' || state.phase === 'failed') return;
-  if (key === 'escape') {
+  const shortcut = flightOverlayShortcut(key, event.target instanceof Element && !!event.target.closest('input, select, textarea'), event.repeat);
+  if (shortcut) {
     event.preventDefault();
-    void act(mapOpen ? 'map' : 'togglePause');
+    void act(shortcut);
     return;
   }
-  if (paused || mapOpen || (event.target instanceof Element && event.target.closest('button, input, select, textarea, [role="group"]'))) return;
+  if (isPaused() || (event.target instanceof Element && event.target.closest('button, input, select, textarea, [role="group"]'))) return;
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(event.key)) event.preventDefault();
   keys.add(key);
   if (event.repeat) return;
@@ -199,7 +212,6 @@ window.addEventListener('keydown', event => {
     else if (opportunity) void act('action');
   }
   if (key === 'r') void act('return');
-  if (key === 'm') void act('map');
 });
 window.addEventListener('keyup', event => {
   const key = event.key.toLowerCase();
@@ -230,7 +242,7 @@ function frame(now: number) {
   lastFrame = now;
   if (document.hidden) { requestAnimationFrame(frame); return; }
   if (state && campaign && mission) {
-    if (!paused && state.phase !== 'debrief' && state.phase !== 'failed') {
+    if (!isPaused() && state.phase !== 'debrief' && state.phase !== 'failed') {
       accumulator += elapsed;
       let steps = 0;
       while (accumulator >= 1 / 60 && steps < 8) {
@@ -250,39 +262,34 @@ function frame(now: number) {
       }
       if (state.outcome !== 'none') writeProgress(state);
     }
+    if ((state.phase === 'debrief' || state.phase === 'failed') && !isPaused()) setFlightOverlay('pause');
     scene?.update(state, campaign, mission);
-    if (scene?.renderScheduledFrame(now, paused)) ui.showGame(state, campaign, mission, estimateLandingFuel(state, campaign, mission));
-    if (state.phase === 'debrief' || state.phase === 'failed') paused = true;
+    if (scene?.renderScheduledFrame(now, isPaused())) ui.showGame(state, campaign, mission, estimateLandingFuel(state, campaign, mission));
     syncVoicePause();
-    if (mapOpen) {
+    if (flightOverlay === 'map') {
       const d = distance2D(state.position, { ...mission.fire, y: 0 });
       root?.setAttribute('data-map-distance', `${Math.round(d)} m`);
     }
   }
-  audio.update(state, paused, mission);
+  audio.update(state, isPaused(), mission);
   requestAnimationFrame(frame);
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && state) { paused = true; mapOpen = false; clearInput(); syncVoicePause(); ui.setPaused(true); queueSave(); }
-  audio.update(state, paused, mission);
+  if (document.hidden && state) setFlightOverlay('pause');
+  audio.update(state, isPaused(), mission);
 });
 window.addEventListener('pagehide', () => { if (state) queueSave(); });
 window.addEventListener('orientationchange', clearInput);
 root.addEventListener('webglcontextlost', event => {
   event.preventDefault();
-  paused = true;
-  clearInput();
-  syncVoicePause();
-  ui.setPaused(true);
-  queueSave();
+  setFlightOverlay('pause');
 });
 root.addEventListener('webglcontextrestored', () => {
   if (state && campaign && mission) {
     scene?.dispose();
     scene = createScene(ui.getSceneHost(), { externalClock: true });
-    paused = true;
-    ui.setPaused(true);
+    setFlightOverlay('pause');
   }
 });
 ui.showMenu();

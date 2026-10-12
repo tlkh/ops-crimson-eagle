@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import type { Mission } from '../types';
 import { createBurnField, type BurnField } from './burnField';
-import { selectFireSites, selectResidualSmokeSites } from './fire';
+import { selectFireSites, selectResidualSmokeSites, setGroundedFlameTransform } from './fire';
 
 const mission = {
   seed: 91003,
@@ -21,6 +22,23 @@ function makeField(sample: BurnField['sample']): BurnField {
 }
 
 describe('fire field placement', () => {
+  it('keeps flame feet on terrain and cards upright as chase camera elevation changes', () => {
+    const card = new THREE.Object3D();
+    const terrainY = 12.4;
+    const bottom = new THREE.Vector3(0, -.5, 0);
+    const normal = new THREE.Vector3(0, 0, 1);
+    for (const cameraY of [4, 35, 180]) {
+      const camera = new THREE.Vector3(21, cameraY, -13);
+      setGroundedFlameTransform(card, 5, terrainY, 3, 6, 9, camera);
+      expect(bottom.clone().applyMatrix4(card.matrix).y).toBeCloseTo(terrainY, 6);
+      expect(normal.clone().transformDirection(card.matrix).y).toBeCloseTo(0, 6);
+      const facing = normal.clone().transformDirection(card.matrix);
+      const towardCamera = camera.clone().sub(new THREE.Vector3(5, terrainY, 3));
+      towardCamera.y = 0;
+      expect(facing.dot(towardCamera.normalize())).toBeCloseTo(1, 6);
+    }
+  });
+
   it('selects deterministic active sources along the front and keeps interior hotspots', () => {
     const field = makeField((x, z) => {
       const radial = Math.hypot(x, z) / mission.fire.radius;

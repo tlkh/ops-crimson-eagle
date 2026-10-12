@@ -1,6 +1,7 @@
 import type { Campaign, CampaignId, Mission } from '../types';
+import { loadCheckpoint } from '../persistence';
 import { buildBriefingMapModel, renderBriefingMap } from './briefingMap';
-import { createLaunchGuard, isMissionUnlocked, selectInitialMission } from './menuState';
+import { createLaunchGuard, isMissionUnlocked, selectInitialMission, summarizeCheckpoint } from './menuState';
 
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 const arrow = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16M13 5l7 7-7 7"/></svg>';
@@ -61,6 +62,7 @@ export function createMenu(menu: HTMLElement, campaigns: Campaign[], options: Me
   let selected: Mission | undefined;
   let mobileView: 'list' | 'briefing' = 'list';
   let campaignScroll = 0;
+  let briefingRevision = 0;
   let opened = false;
   let disposed = false;
 
@@ -109,6 +111,7 @@ export function createMenu(menu: HTMLElement, campaigns: Campaign[], options: Me
   }
   function showCampaigns(event?: Event) {
     if (disposed || launch.pending) return;
+    briefingRevision += 1;
     activeCampaign = undefined;
     selected = undefined;
     menu.innerHTML = `<div class="cm-shell"><header class="cm-header"><div class="cm-brand"><img src="${import.meta.env.BASE_URL}assets/crimson-eagle-mark.png" width="64" height="64" alt=""><div class="cm-brand-copy"><h1>Ops Crimson Eagle</h1><p>Water where the fire needs it.</p></div></div><div class="cm-tools">${options.musicButton()}</div></header><div class="cm-section-head"><h2>Choose deployment</h2><span>02 campaigns</span></div><div class="cm-campaign-grid"></div>${footer()}</div>`;
@@ -141,9 +144,17 @@ export function createMenu(menu: HTMLElement, campaigns: Campaign[], options: Me
     preferred.set(campaign.id, selected.id);
     mobileView = 'list';
     const c = campaignCopy(campaign);
-    menu.innerHTML = `<div class="cm-shell" data-mobile-view="list"><div class="cm-toolbar"><button type="button" class="cm-back" data-campaign-back>${arrow}<span>All campaigns</span></button>${options.musicButton()}</div><header class="cm-campaign-heading"><span class="cm-location">${escape(c.location)} · ${escape(c.date)}</span><h1 tabindex="-1">${escape(campaign.name)}</h1><p class="cm-evidence">${escape(campaign.subtitle)}</p><details><summary>Deployment context</summary><p>${escape(c.copy)}</p></details></header><button type="button" class="cm-back cm-briefing-back" data-list-back>${arrow}<span>All missions</span></button><div class="cm-workspace"><section class="cm-missions" aria-label="Sortie selection"><h2>Choose a sortie</h2><p>6 missions · about 5 simulated minutes each</p><div class="cm-mission-list"></div></section><figure class="cm-map-panel"><div class="cm-map"></div><figcaption>Gameplay terrain · daylight overview</figcaption></figure><section class="cm-briefing" aria-label="Mission briefing"></section></div><footer class="cm-footer"><p>${escape(campaign.operator)}</p>${options.musicCredits()}</footer></div>`;
+    menu.innerHTML = `<div class="cm-shell" data-mobile-view="list"><div class="cm-toolbar"><button type="button" class="cm-back" data-campaign-back>${arrow}<span>All campaigns</span></button>${options.musicButton()}</div><header class="cm-campaign-heading"><span class="cm-location">${escape(c.location)} · ${escape(c.date)}</span><h1 tabindex="-1">${escape(campaign.name)}</h1><p class="cm-evidence">${escape(campaign.subtitle)}</p><details><summary>Deployment context</summary><p>${escape(c.copy)}</p></details></header><button type="button" class="cm-back cm-briefing-back" data-list-back>${arrow}<span>All missions</span></button><div class="cm-workspace"><section class="cm-missions" aria-label="Sortie selection"><h2>Choose a sortie</h2><p>6 missions · about 5 simulated minutes each</p><div class="cm-mission-list"></div></section><section class="cm-briefing" aria-label="Mission briefing"><div class="cm-briefing-scroll"><div class="cm-briefing-copy"></div><figure class="cm-map-panel" data-map-expanded="false"><div class="cm-map" id="briefing-map-preview"></div><figcaption><span class="cm-map-caption">Gameplay terrain · daylight overview</span><button type="button" class="cm-map-toggle" data-map-toggle aria-expanded="false" aria-controls="briefing-map-preview">Expand map</button></figcaption></figure><div class="cm-briefing-body"></div></div><div class="cm-launch-area"><button type="button" class="cm-launch" disabled><span><strong>Checking saved sortie…</strong><small>Looking for an in-progress checkpoint.</small></span>${arrow}</button><p class="cm-error" role="alert" hidden></p></div></section></div><footer class="cm-footer"><p>${escape(campaign.operator)}</p>${options.musicCredits()}</footer></div>`;
     menu.querySelector('[data-campaign-back]')!.addEventListener('click', showCampaigns);
     menu.querySelector('[data-list-back]')!.addEventListener('click', backToList);
+    menu.querySelector<HTMLButtonElement>('[data-map-toggle]')!.addEventListener('click', event => {
+      const button = event.currentTarget as HTMLButtonElement;
+      const panel = menu.querySelector<HTMLElement>('.cm-map-panel')!;
+      const expanded = panel.dataset.mapExpanded !== 'true';
+      panel.dataset.mapExpanded = String(expanded);
+      button.setAttribute('aria-expanded', String(expanded));
+      button.textContent = expanded ? 'Collapse map' : 'Expand map';
+    });
     const list = menu.querySelector('.cm-mission-list')!;
     campaign.missions.forEach((mission, i) => {
       const unlocked = isMissionUnlocked(campaign, mission.id, progress);
@@ -160,7 +171,8 @@ export function createMenu(menu: HTMLElement, campaigns: Campaign[], options: Me
         mobileView = 'briefing';
         menu.querySelector<HTMLElement>('.cm-shell')!.dataset.mobileView = mobileView;
         renderBriefing(campaign, mission, e);
-        if (narrow.matches) { menu.scrollTop = 0; menu.querySelector<HTMLElement>('.cm-briefing h2')?.focus({ preventScroll: true }); }
+        if (narrow.matches) menu.scrollTop = 0;
+        if (keyboardEvent(e) || narrow.matches) menu.querySelector<HTMLElement>('.cm-briefing h2')?.focus({ preventScroll: true });
       });
       list.appendChild(row);
     });
@@ -179,46 +191,82 @@ export function createMenu(menu: HTMLElement, campaigns: Campaign[], options: Me
     animate(menu.querySelector('.cm-missions'), 'back', event);
   }
   function renderBriefing(campaign: Campaign, mission: Mission, event?: Event) {
+    const revision = ++briefingRevision;
+    const isCurrentBriefing = () => !disposed && revision === briefingRevision
+      && selected === mission && activeCampaign === campaign;
     menu.querySelectorAll<HTMLButtonElement>('[data-mission]').forEach(row => row.setAttribute('aria-pressed', String(row.dataset.mission === mission.id)));
     const map = menu.querySelector<HTMLElement>('.cm-map')!;
+    const mapPanel = menu.querySelector<HTMLElement>('.cm-map-panel')!;
+    mapPanel.dataset.mapExpanded = 'false';
+    const mapToggle = menu.querySelector<HTMLButtonElement>('[data-map-toggle]')!;
+    mapToggle.setAttribute('aria-expanded', 'false');
+    mapToggle.textContent = 'Expand map';
     map.innerHTML = renderBriefingMap(campaign, mission);
     map.setAttribute('aria-busy', 'true');
-    const caption = menu.querySelector<HTMLElement>('.cm-map-panel figcaption')!;
+    const caption = menu.querySelector<HTMLElement>('.cm-map-caption')!;
     caption.textContent = 'Preparing terrain overview…';
     // Paint the selected mission immediately; the temporary renderer returns a cached image.
     requestAnimationFrame(() => {
-      if (disposed || !map.isConnected || selected !== mission || activeCampaign !== campaign) return;
+      if (!isCurrentBriefing() || !map.isConnected) return;
       void import('../render/briefingTerrain').then(({ renderBriefingTerrain }) =>
         renderBriefingTerrain(campaign, mission, buildBriefingMapModel(campaign, mission)),
       ).then(image => {
-        if (disposed || !map.isConnected || selected !== mission || activeCampaign !== campaign) return;
+        if (!isCurrentBriefing() || !map.isConnected) return;
         map.innerHTML = renderBriefingMap(campaign, mission, image);
         map.removeAttribute('aria-busy');
         caption.textContent = 'Gameplay terrain · daylight overview · inland ↑';
       }).catch(() => {
-        if (disposed || !map.isConnected || selected !== mission || activeCampaign !== campaign) return;
+        if (!isCurrentBriefing() || !map.isConnected) return;
         map.removeAttribute('aria-busy');
         caption.textContent = 'Terrain preview unavailable · route schematic shown';
       });
     });
     const panel = menu.querySelector<HTMLElement>('.cm-briefing')!;
     const index = campaign.missions.indexOf(mission) + 1;
-    panel.innerHTML = `${fleet(campaign)}${kit(campaign)}<div class="cm-briefing-copy"><p class="cm-evidence">${escape(campaign.name)} · ${escape(campaign.subtitle)}</p><span class="cm-eyebrow">Mission ${String(index).padStart(2, '0')} / ${mission.id.endsWith('01') ? 'Training' : 'Fire suppression'}</span><h2 tabindex="-1">${escape(mission.title)}</h2><p>${escape(mission.description)}</p></div><details class="cm-lesson"><summary>Flying advice</summary><p>${escape(mission.lesson)}</p></details><div class="cm-facts"><p class="cm-summary">${escape(missionSummary(mission))}</p></div><div class="cm-launch-area"><button type="button" class="cm-launch">${arrow}<span>Launch sortie</span></button><small>A matching saved sortie resumes automatically.</small><p class="cm-error" role="alert" hidden></p></div>`;
+    panel.querySelector<HTMLElement>('.cm-briefing-copy')!.innerHTML = `<p class="cm-evidence">${escape(campaign.name)} · ${escape(campaign.subtitle)}</p><span class="cm-eyebrow">Mission ${String(index).padStart(2, '0')} / ${mission.id.endsWith('01') ? 'Training' : 'Fire suppression'}</span><h2 tabindex="-1">${escape(mission.title)}</h2><p>${escape(mission.description)}</p>`;
+    panel.querySelector<HTMLElement>('.cm-briefing-body')!.innerHTML = `${fleet(campaign)}${kit(campaign)}<details class="cm-lesson"><summary>Flying advice</summary><p>${escape(mission.lesson)}</p></details><div class="cm-facts"><p class="cm-summary">${escape(missionSummary(mission))}</p></div>`;
     loadFleet(campaign);
-    panel.querySelector('.cm-launch')!.addEventListener('click', () => { void launchMission(campaign, mission); });
+    const button = panel.querySelector<HTMLButtonElement>('.cm-launch')!;
+    button.disabled = true;
+    button.querySelector('strong')!.textContent = 'Checking saved sortie…';
+    button.querySelector('small')!.textContent = 'Looking for an in-progress checkpoint.';
+    panel.querySelector<HTMLElement>('.cm-error')!.hidden = true;
+    button.onclick = () => { void launchMission(campaign, mission, revision); };
+    void loadCheckpoint(campaign.id).then(checkpoint => {
+      if (!isCurrentBriefing() || !button.isConnected) return;
+      const summary = summarizeCheckpoint(checkpoint, campaign.id, mission.id);
+      button.dataset.actionLabel = summary ? 'Resume sortie' : 'Launch sortie';
+      button.dataset.actionSubtitle = summary?.subtitle ?? 'Start a new sortie at the launch point.';
+      button.querySelector('strong')!.textContent = button.dataset.actionLabel;
+      button.querySelector('small')!.textContent = button.dataset.actionSubtitle;
+      button.disabled = false;
+    }).catch(() => {
+      if (!isCurrentBriefing() || !button.isConnected) return;
+      button.dataset.actionLabel = 'Launch sortie';
+      button.dataset.actionSubtitle = 'Start a new sortie at the launch point.';
+      button.querySelector('strong')!.textContent = button.dataset.actionLabel;
+      button.querySelector('small')!.textContent = button.dataset.actionSubtitle;
+      button.disabled = false;
+    });
     if (event) animate(panel.querySelector('.cm-briefing-copy'), 'detail', event);
   }
-  async function launchMission(campaign: Campaign, mission: Mission) {
-    if (launch.pending || !isMissionUnlocked(campaign, mission.id, progressFor(campaign))) return;
-    const button = menu.querySelector<HTMLButtonElement>('.cm-launch')!;
+  async function launchMission(campaign: Campaign, mission: Mission, revision: number) {
+    if (launch.pending || revision !== briefingRevision || selected !== mission || activeCampaign !== campaign
+      || !isMissionUnlocked(campaign, mission.id, progressFor(campaign))) return;
+    const button = menu.querySelector<HTMLButtonElement>('.cm-launch');
+    if (!button || button.disabled) return;
     const error = menu.querySelector<HTMLElement>('.cm-error')!;
-    button.disabled = true; button.querySelector('span')!.textContent = 'Opening sortie…'; error.hidden = true;
+    button.disabled = true; button.querySelector('strong')!.textContent = 'Opening sortie…'; error.hidden = true;
     menu.setAttribute('aria-busy', 'true');
     try { await launch.run(() => options.onLaunch(campaign.id, mission.id)); }
-    catch { if (!disposed && error.isConnected) { error.textContent = 'The sortie could not open. Please try again.'; error.hidden = false; } }
+    catch { if (!disposed && revision === briefingRevision && error.isConnected) { error.textContent = 'The sortie could not open. Please try again.'; error.hidden = false; } }
     finally {
       menu.removeAttribute('aria-busy');
-      if (!disposed && button.isConnected) { button.disabled = false; button.querySelector('span')!.textContent = 'Launch sortie'; }
+      if (!disposed && revision === briefingRevision && button.isConnected) {
+        button.disabled = false;
+        button.querySelector('strong')!.textContent = button.dataset.actionLabel ?? 'Launch sortie';
+        button.querySelector('small')!.textContent = button.dataset.actionSubtitle ?? 'Start a new sortie at the launch point.';
+      }
     }
   }
   function onResize() {
