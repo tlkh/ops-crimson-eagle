@@ -44,7 +44,8 @@ export function getCinematicEffectStrengths(
   const motion = options.reducedMotion || options.paused ? 0 : smoothstep(speedKmh, 40, 100);
   const motionCap = options.isPhone ? .75 : 1.5;
   out.vignette = THREE.MathUtils.lerp(.08, .05, night);
-  out.edgeBlurCssPixels = options.isPhone ? .75 : 1.25;
+  // Keep terrain and deck contacts crisp; motion supplies the peripheral softness.
+  out.edgeBlurCssPixels = options.isPhone ? .10 : .20;
   out.motionBlurCssPixels = motionCap * motion;
   out.motionBlend = .075 * motion;
   return out;

@@ -5,13 +5,15 @@ import { shipRadomePlacements } from '../content/shipDetails';
 import { createHullPatch, createShipHull, type ShipHullSurface } from './shipHull';
 import { createShipDeck } from './shipDeck';
 import { createShipLightLayout } from './shipLayout';
+import { createVehicleMaterial, createVehiclePaintMaterial } from './vehicleMaterials';
 
 // Bow is -Z; the ship marker anchors geometry, with landing guides offset along +Z.
 // Dimensions are metres. See docs/ship-geometry-references.md for the evidence limits.
 // Flight physics uses y=0 at the aircraft's origin. Its four tyres reach
 // y≈-2.52, so the visible deck must meet those tyres rather than the fuselage.
 const DECK = -2.55;
-const mat = (color: string, metalness = .12, roughness = .82) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
+const mat = (color: string, metalness = .12, roughness = .82) =>
+  createVehicleMaterial(color, roughness, { metalness });
 // A small deterministic paint map gives the large, close-up surfaces seams and
 // irregular weathering without depending on downloaded photography.
 function hullPaintMaps(base: string) {
@@ -183,12 +185,14 @@ export function createShip(scene: THREE.Scene, campaign: Campaign, mission: Miss
   const japanese=campaign.id==='jp_ketapang_2026_09', L=campaign.shipLength, B=campaign.shipWidth;
   const stern=japanese?40:35, s=(fraction:number)=>stern-L+fraction*L;
   const lightLayout = createShipLightLayout(campaign);
-  const steel=mat(japanese?'#858d8e':'#626d70',.18,.9), light=mat('#aab1af',.12,.77), dark=mat('#273239',.08,.86);
+  const steel=mat(japanese?'#8d9696':'#6d787b',.2,.76), light=mat('#b9c1be',.14,.66), dark=mat('#273239',.08,.86);
   const { surface: deck, markings } = createShipDeck(campaign);
-  const white=mat('#d8dcd5',.02,.9), black=mat('#22282b',.08,.92), red=mat('#754e44',.08,.92);
-  const hullPaint=mat('#ffffff',.12,.9);
-  Object.assign(hullPaint,hullPaintMaps(japanese?'#727b7c':'#566164'));
-  hullPaint.normalScale.set(.18,.18); hullPaint.aoMapIntensity=.43;
+  const white=mat('#e0e4de',.02,.86), black=mat('#22282b',.08,.92), red=mat('#754e44',.08,.92);
+  const hullMaps=hullPaintMaps(japanese?'#7b8484':'#606c70') ?? {};
+  const hullPaint=createVehiclePaintMaterial({
+    color:'#ffffff', ...hullMaps, roughness:.86, metalness:.1, normalScale:new THREE.Vector2(.18,.18),
+    aoMapIntensity:.43, envMapIntensity:1.3, name:'Naval weathered hull paint',
+  });
   const hullSurface = createShipHull(g,L,B,stern,japanese,hullPaint,black,red,deck);
   markings.userData.shipSurfaceDecal = true;
   markings.castShadow = false;

@@ -116,7 +116,7 @@ export function createNightLighting(
   fixtureGroups.push(shipGroup);
   ownedObjects.push(shipGroup);
   shipGroup.name = 'Ship navigation and deck lighting';
-  const shipFlood = new THREE.SpotLight('#fff0da', 0, 100, 0.78, 0.9, 2);
+  const shipFlood = new THREE.SpotLight('#fff0da', 0, 74, 0.55, 0.66, 2);
   shipFlood.name = 'ship-deck-flood';
   shipFlood.position.set(shipLayout.deckFlood.position.x, shipLayout.deckFlood.position.y, shipLayout.deckFlood.position.z);
   shipFlood.target.position.set(shipLayout.deckFlood.target.x, shipLayout.deckFlood.target.y, shipLayout.deckFlood.target.z);
@@ -126,7 +126,7 @@ export function createNightLighting(
   shipFlood.castShadow = false;
   shipFlood.shadow.mapSize.set(512, 512);
   shipFlood.shadow.camera.near = 0.5;
-  shipFlood.shadow.camera.far = 105;
+  shipFlood.shadow.camera.far = 78;
   shipFlood.shadow.bias = -0.00035;
   shipFlood.shadow.normalBias = 0.035;
   shipGroup.add(shipFlood, shipFlood.target);
@@ -159,7 +159,7 @@ export function createNightLighting(
   scene.add(shoreGroup);
   fixtureGroups.push(shoreGroup);
   ownedObjects.push(shoreGroup);
-  const shoreFlood = new THREE.SpotLight('#fff0d7', 0, 125, 0.7, 0.72, 2);
+  const shoreFlood = new THREE.SpotLight('#fff0d7', 0, 85, 0.58, 0.68, 2);
   shoreFlood.position.set(25, 11, 15);
   shoreFlood.target.position.set(0, -0.04, 0);
   shoreGroup.add(shoreFlood, shoreFlood.target);
@@ -184,7 +184,7 @@ export function createNightLighting(
   scene.add(settlementGroup);
   fixtureGroups.push(settlementGroup);
   ownedObjects.push(settlementGroup);
-  const settlementPractical = new THREE.PointLight('#ffc47a', 0, 100, 2);
+  const settlementPractical = new THREE.PointLight('#ffc47a', 0, 68, 2);
   settlementPractical.position.set(0, 7, 0);
   settlementGroup.add(settlementPractical);
   ownedObjects.push(settlementPractical);
@@ -265,7 +265,6 @@ export function createNightLighting(
       const downRange = Math.max(8, altitude + 5) / Math.max(0.2, -landingDirection.y);
       const forwardRange = Math.max(14, (altitude + 5) * 0.92) / Math.max(0.2, Math.abs(landingDirection.z));
       landingSpot.target.position.copy(landingPosition).addScaledVector(landingDirection, Math.max(downRange, forwardRange));
-      landingSpot.intensity = night * 14_000;
 
       const shipDistance = Math.hypot(state.position.x - landingPoint.x, state.position.z - landingPoint.z);
       const nearShip = shipDistance < 112;
@@ -278,21 +277,21 @@ export function createNightLighting(
       const shipDeckPhase = state.phase === 'prepare' || state.phase === 'deck_rig' || state.phase === 'land';
       const aircraftLandingMode = landingPhase && state.position.y < 24 && (nearShip || nearShore);
       const aircraftDeckFade = shipDistance < 12 ? smoothstep(0, 3, state.position.y) : 1;
-      shipFlood.intensity = darkFactor * 8_000;
+      shipFlood.intensity = darkFactor * 5_600;
       landingSpot.intensity = darkFactor * aircraftDeckFade * 14_000;
       const darkSortie = darkFactor > 0.56 && sunIntensity <= 0.05;
       const groundedAtShip = shipDeckPhase && shipDistance < 12 && state.position.y < 3;
       shipFlood.castShadow = Boolean(darkSortie && groundedAtShip);
       landingSpot.castShadow = Boolean(darkSortie && aircraftLandingMode && !shipFlood.castShadow);
 
-      shoreFlood.intensity = hasShore ? night * 8_000 : 0;
+      shoreFlood.intensity = hasShore ? night * 5_800 : 0;
       // Reuse the settlement light slot at the closer coastal practical.
       const nearCoast = coastalAnchor && Math.hypot(state.position.x - coastalAnchor.x, state.position.z - coastalAnchor.z) <
         Math.hypot(state.position.x - settlementAnchor.x, state.position.z - settlementAnchor.z);
       if (nearCoast && coastalAnchor) {
         settlementPractical.position.copy(settlementGroup.worldToLocal(practicalPosition.set(coastalAnchor.x, coastalAnchor.y, coastalAnchor.z)));
       } else settlementPractical.position.set(0, 7, 0);
-      settlementPractical.intensity = night * 3_200;
+      settlementPractical.intensity = night * 2_400;
 
       const heat = clamp01((state.fireHeat + state.peatHeat * 0.35) / 100);
       let fireActivity = 0;

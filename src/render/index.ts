@@ -19,6 +19,7 @@ import type { GraphicsMode } from './quality';
 import { createGpuTimer, estimateSceneBytes, FrameHistory } from './renderDiagnostics';
 import { createEnvironmentLighting } from './environmentLighting';
 import { createTextureAssets } from './textureAssets';
+import { chaseFraming, type ChaseFraming } from './chaseCamera';
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
@@ -189,6 +190,10 @@ export function createScene(container: HTMLElement, options: CreateSceneOptions 
   const cameraAim = new THREE.Vector3();
   const cameraLook = new THREE.Vector3();
   const cameraWant = new THREE.Vector3();
+  const chaseOffset = new THREE.Vector3();
+  const lookOffset = new THREE.Vector3();
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  const framingScratch: ChaseFraming = { distance: 0, height: 0, aimHeight: 0, lookAhead: 0, fov: 55 };
   const hudAnchor = new THREE.Vector3();
   const hudStyle = container.parentElement?.style;
   let latestState: SimState | undefined;
@@ -216,6 +221,8 @@ export function createScene(container: HTMLElement, options: CreateSceneOptions 
   let raf = 0;
   let firstFrame = true;
   let dropFraming = 0;
+  let precisionFraming = 1;
+  let rotorSpeed = 4;
   let disposed = false;
   let previousPhase: SimState['phase'] | undefined;
   let previousOutcome: SimState['outcome'] | undefined;
@@ -223,7 +230,7 @@ export function createScene(container: HTMLElement, options: CreateSceneOptions 
   const onResize = () => {
     if (!container.clientWidth || !container.clientHeight) return;
     renderer.setPixelRatio(Number.isFinite(options.pixelRatio) && (options.pixelRatio ?? 0) > 0
-      ? options.pixelRatio! : scenePixelRatio(container.clientWidth, container.clientHeight, window.devicePixelRatio, profile.renderScale));
+      ? options.pixelRatio! : scenePixelRatio(container.clientWidth, container.clientHeight, window.devicePixelRatio, profile.renderScale, profile.sceneLongEdge));
     renderer.setSize(container.clientWidth, container.clientHeight, false);
     cinematic.resize(container.clientWidth, container.clientHeight);
     camera.aspect = container.clientWidth / container.clientHeight;
@@ -277,19 +284,25 @@ export function createScene(container: HTMLElement, options: CreateSceneOptions 
       const crashed = latestState.phase === 'failed' &&
         (latestState as SimState & { failureCause?: string }).failureCause === 'collision';
       const slowRotor = latestState.phase === 'prepare' || latestState.phase === 'deck_rig' || latestState.phase === 'land';
+      const rotorTarget = slowRotor ? 4 : 52;
+      if (firstFrame) rotorSpeed = rotorTarget;
+      else rotorSpeed += (rotorTarget - rotorSpeed) * (1 - Math.exp(-simulationDelta * 2));
+      const rotorSweep = THREE.MathUtils.smoothstep(rotorSpeed, 8, 38);
       vehicle.rotors.forEach(r => {
-        if (!crashed) r.rotation.y += simulationDelta * (slowRotor ? 4 : 52) * Number(r.userData.spin || 1);
+        if (!crashed) r.rotation.y += simulationDelta * rotorSpeed * Number(r.userData.spin || 1);
         const disc = r.userData.disc as THREE.Mesh;
         const discMaterial = disc.material as THREE.MeshBasicMaterial;
         disc.visible = !crashed;
-        discMaterial.opacity = slowRotor ? .25 : .64;
+        discMaterial.opacity = THREE.MathUtils.lerp(.08, .56, rotorSweep);
         (r.userData.blades as THREE.Mesh[]).forEach(blade => {
           const mat = blade.material as THREE.MeshStandardMaterial;
-          // Keep the physical blades legible at flight RPM alongside the swept disc.
-          // Simulation-time rotation freezes both elements consistently when paused.
+          // At flight RPM the swept texture carries motion; opaque spokes would
+          // strobe at the 30/60 Hz render cadence. Slow handling keeps solid blades.
           blade.visible = !crashed;
-          mat.opacity = 1;
-          mat.depthWrite = true;
+          if (!mat.transparent) { mat.transparent = true; mat.needsUpdate = true; }
+          mat.opacity = THREE.MathUtils.lerp(1, .10, rotorSweep);
+          mat.depthWrite = rotorSweep < .5;
+          blade.castShadow = rotorSweep < .5;
         });
       });
       const heat = clamp((latestState.fireHeat + latestState.peatHeat * .35) / 100, 0, 1);
@@ -297,20 +310,27 @@ export function createScene(container: HTMLElement, options: CreateSceneOptions 
       bucketRig.update(latestState, latestCampaign, latestMission);
       groundCrew?.update(latestState);
 
-      // Chase camera sits behind the nose, elevated enough to read the sling and approach.
       const heading = latestState.heading;
-      // A narrow portrait viewport needs more distance to keep the full rotor span in frame.
-      const framing = clamp(.85 / Math.max(.45, camera.aspect), 1, 1.85);
       const waterState = latestState as ExtendedSimState;
       const releasing = waterState.dumping || waterState.waterPackets?.length > 0;
-      dropFraming += ((releasing ? 1 : 0) - dropFraming) * (1 - Math.exp(-delta * 2));
-      const chase = new THREE.Vector3(0, (19 + Math.max(0, pos.y) * .035) * framing, (44 + dropFraming * 8) * framing);
-      chase.applyAxisAngle(new THREE.Vector3(0, 1, 0), heading);
-      cameraWant.set(pos.x + chase.x, pos.y + chase.y, pos.z + chase.z);
-      // Keep the 22 m sling load inside the chase view during flight. Ease the
-      // look target so rigging and recovery do not snap the camera vertically.
-      cameraAim.set(pos.x, pos.y + (latestState.bucketAttached ? -17 - dropFraming * 8 : 4), pos.z)
-        .add(new THREE.Vector3(0, 0, -13).applyAxisAngle(new THREE.Vector3(0, 1, 0), heading));
+      const heightAboveGround = Math.max(0, pos.y - world.terrainHeight(pos.x, pos.z));
+      const nearLake = Math.hypot(pos.x - latestMission.lake.x, pos.z - latestMission.lake.z) < latestMission.lake.radius + 70;
+      const nearFire = Math.hypot(pos.x - latestMission.fire.x, pos.z - latestMission.fire.z) < latestMission.fire.radius + 70;
+      const precisionTarget = heightAboveGround < 16 || waterState.fetching || releasing ||
+        ((nearLake || nearFire) && heightAboveGround < 100) ? 1 : 0;
+      // Framing changes follow simulation time, including pause and capture.
+      const compositionBlend = 1 - Math.exp(-simulationDelta * 2);
+      if (firstFrame) { precisionFraming = precisionTarget; dropFraming = releasing ? 1 : 0; }
+      else {
+        precisionFraming += (precisionTarget - precisionFraming) * compositionBlend;
+        dropFraming += ((releasing ? 1 : 0) - dropFraming) * compositionBlend;
+      }
+      const framing = chaseFraming(camera.aspect, latestState.bucketAttached, precisionFraming,
+        dropFraming, Math.hypot(latestState.velocity.x, latestState.velocity.z), framingScratch);
+      chaseOffset.set(0, framing.height, framing.distance).applyAxisAngle(worldUp, heading);
+      lookOffset.set(0, 0, -framing.lookAhead).applyAxisAngle(worldUp, heading);
+      cameraWant.copy(chaseOffset).add(aircraft.position);
+      cameraAim.set(pos.x, pos.y + framing.aimHeight, pos.z).add(lookOffset);
       if (firstFrame) {
         camera.position.copy(cameraWant);
         cameraLook.copy(cameraAim);
@@ -318,11 +338,7 @@ export function createScene(container: HTMLElement, options: CreateSceneOptions 
       } else camera.position.lerp(cameraWant, 1 - Math.exp(-delta * 2.6));
       if (!firstFrame) cameraLook.lerp(cameraAim, 1 - Math.exp(-delta * 2.6));
       camera.lookAt(cameraLook);
-      // A gentle widening above the working altitude reveals more of the
-      // receding terrain. Keep the landing/dipping view and near bucket stable.
-      const heightAboveGround = Math.max(0, pos.y - world.terrainHeight(pos.x, pos.z));
-      const altitudeFraming = THREE.MathUtils.smoothstep(heightAboveGround, 80, 320) * 3;
-      camera.fov = clamp(53 + Math.hypot(latestState.velocity.x, latestState.velocity.z) * .022 + altitudeFraming, 53, 62);
+      camera.fov = framing.fov;
       camera.updateProjectionMatrix();
       // Capture callers can choose a stable view after the normal chase-camera
       // calculations. World and cinematic effects below then use this pose too.
@@ -482,6 +498,8 @@ export function createScene(container: HTMLElement, options: CreateSceneOptions 
         adaptive.reset(); cadence.reset(); renderDirty = true;
         firstFrame = true;
         dropFraming = 0;
+        precisionFraming = 1;
+        rotorSpeed = 4;
       } else {
         const wasFailed = previousPhase === 'failed' || previousOutcome === 'failed';
         const isFailed = state.phase === 'failed' || state.outcome === 'failed';

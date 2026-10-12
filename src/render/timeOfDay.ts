@@ -18,20 +18,20 @@ export type TimeOfDayEvaluation = {
 };
 
 const MAX_SUN_ELEVATION = 68 * Math.PI / 180;
-const NIGHT_ZENITH: LinearRgb = [0.012, 0.022, 0.065];
-const DAY_ZENITH: LinearRgb = [0.27, 0.48, 0.64];
-const TWILIGHT_ZENITH: LinearRgb = [0.22, 0.15, 0.23];
-const NIGHT_HORIZON: LinearRgb = [0.035, 0.05, 0.09];
-const DAY_HORIZON: LinearRgb = [0.61, 0.70, 0.67];
-const TWILIGHT_HORIZON: LinearRgb = [0.88, 0.31, 0.15];
-const NIGHT_FOG: LinearRgb = [0.018, 0.027, 0.052];
-const DAY_FOG: LinearRgb = [0.43, 0.48, 0.43];
-const TWILIGHT_FOG: LinearRgb = [0.45, 0.24, 0.16];
+const NIGHT_ZENITH: LinearRgb = [0.023, 0.038, 0.083];
+const DAY_ZENITH: LinearRgb = [0.18, 0.38, 0.65];
+const TWILIGHT_ZENITH: LinearRgb = [0.18, 0.17, 0.31];
+const NIGHT_HORIZON: LinearRgb = [0.045, 0.064, 0.105];
+const DAY_HORIZON: LinearRgb = [0.56, 0.70, 0.81];
+const TWILIGHT_HORIZON: LinearRgb = [0.82, 0.36, 0.24];
+const NIGHT_FOG: LinearRgb = [0.030, 0.046, 0.077];
+const DAY_FOG: LinearRgb = [0.50, 0.64, 0.73];
+const TWILIGHT_FOG: LinearRgb = [0.49, 0.31, 0.27];
 const NIGHT_SUN: LinearRgb = [0.23, 0.31, 0.52];
 const DAY_SUN: LinearRgb = [1, 0.91, 0.73];
 const TWILIGHT_SUN: LinearRgb = [1, 0.47, 0.22];
-const NIGHT_AMBIENT: LinearRgb = [0.28, 0.36, 0.50];
-const DAY_AMBIENT: LinearRgb = [0.77, 0.84, 0.88];
+const NIGHT_AMBIENT: LinearRgb = [0.35, 0.44, 0.62];
+const DAY_AMBIENT: LinearRgb = [0.74, 0.83, 0.96];
 
 function smoothstep(edge0: number, edge1: number, value: number): number {
   const t = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)));
@@ -95,7 +95,7 @@ export function evaluateTimeOfDay(mission: Mission, timeSec: number): TimeOfDayE
     sunColor,
     sunIntensity: 3.5 * sunAboveHorizon,
     ambientColor,
-    ambientIntensity: 0.82 + 1.48 * daylight,
+    ambientIntensity: 0.94 + 1.26 * daylight,
     nightStrength,
   };
 }

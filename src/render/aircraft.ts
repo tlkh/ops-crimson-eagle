@@ -3,10 +3,12 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import type { Campaign } from '../types';
 import { createAircraftLightMounts } from './aircraftLighting';
+import { createVehicleGlassMaterial, createVehicleMaterial, createVehiclePaintMaterial } from './vehicleMaterials';
 
 const TAU = Math.PI * 2;
 type P = [number, number, number];
-const mat = (color: string, roughness = .78, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness, ...extra });
+const mat = (color: string, roughness = .78, extra: THREE.MeshStandardMaterialParameters = {}) =>
+  createVehicleMaterial(color, roughness, extra);
 function mesh(parent: THREE.Object3D, geometry: THREE.BufferGeometry, material: THREE.Material, p: P = [0, 0, 0]) {
   const m = new THREE.Mesh(geometry, material); m.position.set(...p); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m;
 }
@@ -361,7 +363,7 @@ function rotorBlurTexture() {
 function paintSet(japanese: boolean) {
   const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 1024;
   const ctx = canvas.getContext('2d')!;
-  const base = japanese ? '#756449' : '#666b59';
+  const base = japanese ? '#806e53' : '#6d735f';
   ctx.fillStyle = base; ctx.fillRect(0,0,1024,1024);
   if (japanese) {
     // The supplied JGSDF photographs show broad tan ground with fewer,
@@ -385,11 +387,11 @@ function paintSet(japanese: boolean) {
       [230,410,350,225,.22], [670,465,350,225,-.18], [85,720,300,215,.26],
       [455,825,315,230,-.12], [920,790,300,215,.28],
     ];
-    green.forEach(([x,y,w,h,r],i) => blob(x,y,w,h,r,'#3e5549',i));
+    green.forEach(([x,y,w,h,r],i) => blob(x,y,w,h,r,'#475e51',i));
     // The almost-black colour is a small boundary accent, not a third set of
     // broad islands. Place a narrow, broken field on every other green edge.
     green.forEach(([x,y,w,h,r],i) => {
-      if (i % 2 === 0) blob(x+w*.37,y-h*.24,w*.22,h*.58,r+.18,'#1d2c27',i+10);
+      if (i % 2 === 0) blob(x+w*.37,y-h*.24,w*.22,h*.58,r+.18,'#24332c',i+10);
     });
     // The aft closure uses its own solid green paint, so the general side
     // camouflage atlas needs no special centre patch or thin rear squiggle.
@@ -430,7 +432,11 @@ function paintSet(japanese: boolean) {
   const aoMap=new THREE.CanvasTexture(aoCanvas); aoMap.anisotropy=2;
   // A broad, restrained environment highlight makes the fuselage curvature
   // readable against hazy terrain without changing either livery's colours.
-  const skin=mat('#ffffff',.92,{map,roughnessMap,normalMap,normalScale:new THREE.Vector2(.22,.22),aoMap,aoMapIntensity:.58,metalness:.04,envMapIntensity:1.12}); skin.name=japanese?'JGSDF three-colour painted skin':'RSAF olive-grey painted skin';
+  const skin=createVehiclePaintMaterial({
+    color:'#ffffff', map, roughnessMap, normalMap, normalScale:new THREE.Vector2(.22,.22), aoMap,
+    roughness:.86, metalness:.035, aoMapIntensity:.58, envMapIntensity:1.3,
+    name:japanese?'JGSDF three-colour painted skin':'RSAF olive-grey painted skin',
+  });
   let aftSkin=skin;
   if(japanese) {
     const aftCanvas=document.createElement('canvas'); aftCanvas.width=512; aftCanvas.height=512;
@@ -441,10 +447,13 @@ function paintSet(japanese: boolean) {
       aftCtx.fillStyle=stain; aftCtx.fillRect(x-13,438,26,74);
     }
     const aftMap=new THREE.CanvasTexture(aftCanvas); aftMap.colorSpace=THREE.SRGBColorSpace; aftMap.anisotropy=2;
-    aftSkin=mat('#3e5549',.92,{map:aftMap,roughnessMap,normalMap,normalScale:new THREE.Vector2(.22,.22),aoMap,aoMapIntensity:.58,metalness:.04,envMapIntensity:1.12});
+    aftSkin=createVehiclePaintMaterial({
+      color:'#475e51', map:aftMap, roughnessMap, normalMap, normalScale:new THREE.Vector2(.22,.22), aoMap,
+      roughness:.86, metalness:.035, aoMapIntensity:.58, envMapIntensity:1.3,
+      name:'JGSDF solid green aft paint',
+    });
   }
-  if(japanese) aftSkin.name='JGSDF solid green aft paint';
-  const trim=mat(japanese?'#3d5146':base,.85), seam=mat(japanese?'#263630':'#484f40',.86);
+  const trim=mat(japanese?'#53674f':'#747a64',.82), seam=mat(japanese?'#303d34':'#515747',.84);
   return {skin,aftSkin,trim,seam};
 }
 
@@ -455,20 +464,18 @@ export function createAircraft(campaign: Campaign) {
   const solid = new THREE.Group(); root.add(solid);
   const paint = paintSet(japanese);
   const body = paint.skin, olive = paint.trim, brown = paint.seam;
-  const dark = mat('#202620'), rubber = mat('#131815', .98), metal = mat('#6d7168', .42, { metalness: .7 });
+  const dark = mat('#202620'), rubber = mat('#131815', .98), metal = mat('#858d86', .48, { metalness: .56 });
   rubber.name='Chinook tyres';
   // Opaque dark cockpit glass keeps a readable canopy while using a broad,
   // restrained highlight instead of expensive transmission/refraction.
-  const glass = mat('#263d43', .18, { metalness: .32, side: THREE.DoubleSide, envMapIntensity: 1.18 });
-  glass.name='Chinook cockpit glazing';
-  const cabinGlass=mat('#263d43', .18, { metalness: .32, side: THREE.DoubleSide, envMapIntensity: 1.18 });
-  cabinGlass.name='Chinook cabin glazing';
+  const glass = createVehicleGlassMaterial('#3c5961', 'Chinook cockpit glazing', { roughness:.22, clearcoat:.62, envMapIntensity:1.5 });
+  const cabinGlass=createVehicleGlassMaterial('#30474d', 'Chinook cabin glazing', { roughness:.27, clearcoat:.42, envMapIntensity:1.32 });
   const roundelWhite=japanese?mat('#e5e2cb',.8,{side:THREE.DoubleSide}):undefined;
   const roundelRed=japanese?mat('#ae3036',.8,{side:THREE.DoubleSide}):undefined;
   if(roundelWhite) roundelWhite.name='JGSDF roundel white';
   if(roundelRed) roundelRed.name='JGSDF roundel red';
-  const rearRecess=mat('#1a2421',.91,{side:THREE.DoubleSide}); rearRecess.name='Chinook rear cargo recess';
-  const rearSill=mat('#62706b',.72); rearSill.name='Chinook rear cargo sill';
+  const rearRecess=mat('#2b3833',.86,{side:THREE.DoubleSide,metalness:.04,envMapIntensity:1.26}); rearRecess.name='Chinook rear cargo recess';
+  const rearSill=mat('#78847c',.68); rearSill.name='Chinook rear cargo sill';
   // Constant-section cargo cabin, faceted chin, and an upswept, mostly raised ramp.
   const cabinStations: Station[] = [[-7.8,.08,-.50,-.23],[-7.52,.47,-.79,.02],[-7.12,.88,-1.04,.49],[-6.67,1.19,-1.18,1.02],[-6.05,1.37,-1.32,1.43],[-5.2,1.42,-1.34,1.55],[4.6,1.42,-1.32,1.55],[6.0,1.34,-1.2,1.48],[6.8,1.25,-.97,1.35],[7.55,1.16,-.61,1.17],[8.22,1.10,-.31,1.03]];
   cockpitShell(solid,cabinStations,body,glass,brown);

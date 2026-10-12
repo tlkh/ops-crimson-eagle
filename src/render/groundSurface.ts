@@ -176,6 +176,12 @@ export function createGroundSurface(textureAssets?: GroundTextureAssets, burnFie
         macroDomain += (vec2(groundNoise(macroDomain + vec2(3.2, 8.1)), groundNoise(macroDomain + vec2(12.4, 2.7))) - .5) * .9;
         float broadPatch = groundNoise(macroDomain);
         float mediumPatch = groundNoise(worldXZ * .009 + vec2(4.7, 11.3));
+        // Tens-of-metres litter and undergrowth patches remain legible from a
+        // low chase camera. Warp them with the broad field to avoid a grid.
+        vec2 standDomain = worldXZ * .019 + (vec2(broadPatch, mediumPatch) - .5) * .7;
+        float standPatch = groundNoise(standDomain + vec2(10.3, 3.8));
+        float litterPatch = groundNoise(worldXZ * .038 + vec2(7.1, 18.4) + standPatch * .34);
+        float standFade = 1.0 - smoothstep(420.0, 1650.0, groundDistance);
         float grassTone = groundNoise(macroDomain + vec2(2.1, 5.8));
         float peatTone = groundNoise(macroDomain + vec2(8.7, 1.4));
         float sandTone = groundNoise(macroDomain + vec2(5.2, 13.1));
@@ -226,10 +232,15 @@ export function createGroundSurface(textureAssets?: GroundTextureAssets, burnFie
         // Give the working-altitude foreground more surface definition while
         // keeping distant habitat quiet. Burn layers below retain their own
         // immutable coverage and colours rather than inheriting extra noise.
-        float macroBreakup = (broadPatch - .5) * .20 + (mediumPatch - .5) * (.12 + .12 * groundDetailFade);
+        float macroBreakup = (broadPatch - .5) * .27 + (mediumPatch - .5) * (.14 + .13 * standFade);
         float albedoVariation = (groundSample.r - .5) * .48;
         diffuseColor.rgb *= mix(vec3(1.0), habitatTint, .72);
         diffuseColor.rgb *= 1.0 + macroBreakup;
+        float vegetatedGround = clamp(groundWeights.x + groundWeights.y * .68, 0.0, 1.0) * standFade;
+        float shadedStand = smoothstep(.47, .73, standPatch) * vegetatedGround;
+        float leafLitter = smoothstep(.55, .79, litterPatch) * vegetatedGround * (1.0 - shadedStand * .45);
+        diffuseColor.rgb *= mix(vec3(1.0), vec3(.74, .83, .66), shadedStand * .53);
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.19, 1.08, .78), leafLitter * .27);
         diffuseColor.rgb *= 1.0 + albedoVariation * groundDetailFade;
         diffuseColor.rgb = mix(diffuseColor.rgb, singedTint, burnSingedFringe * .74);
         diffuseColor.rgb = mix(diffuseColor.rgb, ashTint, burnAshLayer * (.65 + .2 * burnAshMottle));
@@ -237,13 +248,14 @@ export function createGroundSurface(textureAssets?: GroundTextureAssets, burnFie
         diffuseColor.rgb *= 1.0 - groundWetness * .24;
         float burnRelief = (burnAshLayer * (.004 + .003 * burnAshMottle)
           - burnCharCore * (.004 + .003 * burnMottle) + burnCharImprint * .001) * burnDetailFade;
-        float groundBumpHeight = (groundSample.g - .5) * .26 * groundDetailFade + burnRelief;`)
+        float groundBumpHeight = (groundSample.g - .5) * .26 * groundDetailFade
+          + (litterPatch - .5) * .07 * vegetatedGround + burnRelief;`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         float grassRoughness = .70 + grassSample.b * .28;
         float peatRoughness = .62 + peatSample.b * .32;
         float sandRoughness = .56 + sandSample.b * .34;
         float detailedRoughness = dot(groundWeights, vec3(grassRoughness, peatRoughness, sandRoughness));
-        roughnessFactor = clamp(mix(.97, detailedRoughness, groundDetailFade) + burnCharCore * .07
+        roughnessFactor = clamp(mix(.97, detailedRoughness, groundDetailFade) + leafLitter * .045 + burnCharCore * .07
           + burnAshLayer * .035 + burnSingedFringe * .012 - groundWetness * .34, .05, 1.0);`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         vec3 groundPosition = -vViewPosition;
@@ -255,7 +267,7 @@ export function createGroundSurface(textureAssets?: GroundTextureAssets, burnFie
         vec3 groundGradient = sign(groundDet) * (dFdx(groundBumpHeight) * groundR1 + dFdy(groundBumpHeight) * groundR2);
         normal = normalize(abs(groundDet) * normal - groundGradient);`);
   };
-  material.customProgramCacheKey = () => 'ground-surface-atlas-burn-v4';
+  material.customProgramCacheKey = () => 'ground-surface-atlas-burn-v5';
   if (lease) {
     void lease.ready.then(readyAtlas => {
       if (disposed) return;

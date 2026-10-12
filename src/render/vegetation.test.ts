@@ -260,6 +260,41 @@ describe('procedural tropical vegetation', () => {
     const center = new THREE.Vector3(2_200, 0, 0);
     const canopies = instanceMeshes(scene, 'lowland tropical canopy');
     const trunks = instanceMeshes(scene, 'lowland tree boles');
+    const colliderAt = new Map<string, typeof vegetation.treeColliders>();
+    for (const tree of vegetation.treeColliders) {
+      const key = `${Math.round(Math.fround(tree.x))}:${Math.round(Math.fround(tree.z))}`;
+      const bucket = colliderAt.get(key) ?? [];
+      bucket.push(tree);
+      colliderAt.set(key, bucket);
+    }
+    const checkCrownContactBounds = () => {
+      const matrix = new THREE.Matrix4();
+      const position = new THREE.Vector3();
+      const scale = new THREE.Vector3();
+      let largestLowerOverflow = -Infinity;
+      let largestUpperOverflow = -Infinity;
+      let checked = 0;
+      for (const canopy of canopies) {
+        canopy.geometry.computeBoundingBox();
+        const bounds = canopy.geometry.boundingBox!;
+        for (let index = 0; index < canopy.count; index++) {
+          canopy.getMatrixAt(index, matrix);
+          matrix.decompose(position, new THREE.Quaternion(), scale);
+          const tree = colliderAt.get(`${Math.round(position.x)}:${Math.round(position.z)}`)?.find(candidate =>
+            Math.hypot(candidate.x - position.x, candidate.z - position.z) < .02,
+          );
+          expect(tree).toBeDefined();
+          const contactBottom = tree!.ground + tree!.height * .96 - tree!.radius * 1.1;
+          const contactTop = tree!.ground + tree!.height * .96 + tree!.radius * 1.35;
+          largestLowerOverflow = Math.max(largestLowerOverflow, Math.abs(contactBottom - (position.y + bounds.min.y * scale.y)));
+          largestUpperOverflow = Math.max(largestUpperOverflow, Math.abs(position.y + bounds.max.y * scale.y - contactTop));
+          checked++;
+        }
+      }
+      expect(checked).toBeGreaterThan(0);
+      expect(largestLowerOverflow).toBeLessThanOrEqual(.01);
+      expect(largestUpperOverflow).toBeLessThanOrEqual(.01);
+    };
 
     try {
       vegetation.update(center, 'high');
@@ -267,6 +302,8 @@ describe('procedural tropical vegetation', () => {
       expect(vegetation.stats.lodCells.mid).toBeGreaterThan(0);
       expect(vegetation.stats.lodCells.far).toBeGreaterThan(0);
       const detailedNearTriangles = Math.max(...canopies.map(triangleCount));
+      expect(detailedNearTriangles).toBeLessThanOrEqual(450);
+      checkCrownContactBounds();
       expect(scene.getObjectByName('forest understory')?.visible).toBe(true);
       expect(trunks.every(mesh => mesh.visible)).toBe(true);
       expect(trunks.reduce((sum, mesh) => sum + mesh.count, 0)).toBe(vegetation.treeColliders.length);
@@ -274,6 +311,8 @@ describe('procedural tropical vegetation', () => {
       vegetation.update(center, 'low');
       const mobileNearTriangles = Math.max(...canopies.map(triangleCount));
       expect(mobileNearTriangles).toBeLessThan(detailedNearTriangles);
+      expect(mobileNearTriangles).toBeLessThanOrEqual(200);
+      checkCrownContactBounds();
       expect(scene.getObjectByName('forest understory')?.visible).toBe(false);
       expect(trunks.every(mesh => mesh.visible)).toBe(true);
       expect(trunks.reduce((sum, mesh) => sum + mesh.count, 0)).toBe(vegetation.treeColliders.length);
@@ -281,6 +320,8 @@ describe('procedural tropical vegetation', () => {
       vegetation.update(new THREE.Vector3(100_000, 0, 100_000), 'high');
       expect(vegetation.stats.lodCells.far).toBe(canopies.length);
       expect(Math.max(...canopies.map(triangleCount))).toBeLessThan(mobileNearTriangles);
+      expect(Math.max(...canopies.map(triangleCount))).toBeLessThanOrEqual(50);
+      checkCrownContactBounds();
       expect(trunks.every(mesh => mesh.visible)).toBe(true);
       expect(trunks.reduce((sum, mesh) => sum + mesh.count, 0)).toBe(26_000);
     } finally {

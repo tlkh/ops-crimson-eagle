@@ -2,7 +2,8 @@ export type GraphicsMode = 'auto' | 'high' | 'battery';
 export type RenderQualityProfile = {
   targetFps: 30 | 60;
   renderScale: number;
-  shadowSize: 512 | 1024;
+  sceneLongEdge: 1440 | 1920;
+  shadowSize: 512 | 1024 | 2048;
   reflectionSize: 256 | 512;
   reflectionIntervalMs: number;
   reflections: boolean;
@@ -16,7 +17,8 @@ export function qualityProfile(mode: GraphicsMode, mobile: boolean, level = 0): 
   return {
     targetFps: mobile || mode === 'battery' ? 30 : 60,
     renderScale: [1, 1, .85, .7][tier],
-    shadowSize: tier < 2 ? 1024 : 512,
+    sceneLongEdge: mode === 'high' && !mobile ? 1920 : 1440,
+    shadowSize: mode === 'high' && !mobile ? 2048 : tier < 2 ? 1024 : 512,
     reflectionSize: tier === 0 ? 512 : 256,
     reflectionIntervalMs: [80, 160, 240, 320][tier],
     reflections: tier < 3,
@@ -25,10 +27,10 @@ export function qualityProfile(mode: GraphicsMode, mobile: boolean, level = 0): 
   };
 }
 
-export function scenePixelRatio(width: number, height: number, deviceRatio: number, scale: number): number {
+export function scenePixelRatio(width: number, height: number, deviceRatio: number, scale: number, longEdge = 1440): number {
   const longest = Math.max(1, width, height);
   const dpr = Number.isFinite(deviceRatio) && deviceRatio > 0 ? deviceRatio : 1;
-  return Math.max(.1, Math.min(dpr, 1.5, 1440 / longest) * scale);
+  return Math.max(.1, Math.min(dpr, 1.5, longEdge / longest) * scale);
 }
 
 /** Renderer-independent policy: warm-up, sustained overload, slow recovery. */

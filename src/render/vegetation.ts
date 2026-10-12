@@ -79,11 +79,11 @@ type Plant = {
   burnActivity: number;
 };
 const canopyProfiles: Record<Species, [number, number, number]> = {
-  broadleaf: [1, .94, 1],
-  emergent: [1.14, 1.08, 1.14],
-  secondary: [.82, 1.2, .84],
-  swamp: [1.16, .88, 1.12],
-  coastal: [1.26, .8, 1.2],
+  broadleaf: [1.08, 1, 1.04],
+  emergent: [1.13, 1.1, 1.09],
+  secondary: [.96, 1.12, .91],
+  swamp: [1.22, .9, 1.17],
+  coastal: [1.26, .82, 1.18],
   palm: [.7, .6, .7],
 };
 
@@ -220,38 +220,43 @@ function indexRoadSegments(paths: readonly RoadPath[]) {
 type CrownLod = 'near' | 'mid' | 'far';
 type ActiveCrownLod = CrownLod | 'near-low';
 
-/** A tropical crown is a layered cluster of rounded boughs and small leaf fans. */
+/** Asymmetric boughs break up the skyline without adding trees or draw calls. */
 function makeCrown(lod: CrownLod, visualTier: VegetationVisualTier): THREE.BufferGeometry {
   const fullNear = lod === 'near' && visualTier === 'full';
   const clusters: Array<[number, number, number, number, number, number, number]> = fullNear
     ? [
-      [0, .02, 0, .48, .43, .5, 0],
-      [-.42, -.14, .1, .54, .37, .46, 1],
-      [.43, -.19, -.1, .55, .36, .51, 2],
-      [-.2, .22, -.43, .47, .35, .51, 1],
-      [.16, .1, .45, .45, .43, .51, 3],
-      [.02, .46, -.08, .42, .34, .43, 0],
-      [-.47, -.37, -.2, .38, .29, .37, 2],
+      [0, .02, 0, .57, .51, .56, 0],
+      [-.43, -.15, .12, .60, .39, .53, 1],
+      [.46, -.22, -.10, .61, .41, .55, 2],
+      [-.23, .26, -.48, .54, .38, .52, 1],
+      [.19, .15, .47, .52, .45, .56, 3],
+      [.02, .48, -.11, .45, .38, .47, 0],
+      [-.49, -.39, -.20, .43, .33, .40, 2],
+      [.49, -.42, .27, .39, .30, .40, 3],
     ]
     : lod === 'near'
       ? [
-        [0, .02, 0, .5, .44, .51, 0],
-        [-.43, -.15, .08, .55, .38, .47, 1],
-        [.44, -.18, -.08, .55, .37, .51, 2],
-        [-.17, .2, -.43, .48, .36, .51, 1],
-        [.15, .12, .45, .46, .42, .52, 3],
+        [0, .02, 0, .59, .52, .58, 0],
+        [-.45, -.17, .10, .61, .41, .54, 1],
+        [.47, -.24, -.10, .61, .42, .56, 2],
+        [-.20, .24, -.46, .56, .39, .53, 1],
+        [.19, .13, .47, .54, .45, .56, 3],
       ]
       : lod === 'mid'
         ? [
-          [0, .01, 0, .52, .44, .53, 0],
-          [-.43, -.15, .08, .56, .38, .48, 1],
-          [.44, -.17, -.08, .56, .38, .52, 2],
-          [.02, .37, -.04, .46, .36, .46, 3],
+          [0, .01, 0, .60, .52, .59, 0],
+          [-.46, -.19, .10, .63, .42, .55, 1],
+          [.48, -.23, -.09, .64, .43, .57, 2],
+          [.01, .40, -.08, .49, .40, .49, 3],
         ]
-        : [[0, 0, 0, .83, .58, .82, 1]];
-  const fanCount = fullNear ? 5 : 0;
-  const segments = 5;
-  const rings = 3;
+        : [
+          [0, .07, 0, .65, .70, .65, 0],
+          [-.46, -.13, .12, .59, .49, .55, 1],
+          [.41, -.22, -.15, .62, .45, .56, 2],
+        ];
+  const fanCount = fullNear ? 4 : 0;
+  const segments = 6;
+  const rings = lod === 'far' ? 2 : 3;
   const positions: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
@@ -268,12 +273,18 @@ function makeCrown(lod: CrownLod, visualTier: VegetationVisualTier): THREE.Buffe
     const uv = geometry.getAttribute('uv');
     const rotation = new THREE.Matrix4().makeRotationY(rotationY);
     const point = new THREE.Vector3();
-    const jitter = (value: number, seed: number) => Math.sin(value * 8.1 + seed * 2.37) * .026
-      + Math.sin(value * 14.7 - seed * 1.93) * .014;
     for (let i = 0; i < position.count; i++) {
       const x = position.getX(i), y = position.getY(i), z = position.getZ(i);
-      const bump = 1 + jitter(x + z * 1.7, salt) * (lod === 'near' ? 1 : .45);
-      point.set(x * scale.x * bump, y * scale.y * bump, z * scale.z * bump).applyMatrix4(rotation).add(center);
+      const angle = Math.atan2(z, x);
+      // Different harmonics make the shared low-poly shell irregular in every
+      // yaw; far crowns keep this outline when their smaller boughs disappear.
+      const lobes = .105 * Math.sin(angle * 3 + salt * .73)
+        + .07 * Math.sin(angle * 2 - salt * 1.17)
+        + .045 * Math.cos(angle * 5 + salt * .31);
+      const bump = 1 + lobes * (.52 + .48 * Math.abs(y));
+      const shelf = (1 - Math.abs(y)) * .09 * Math.sin(angle * 4 + salt * .43);
+      point.set(x * scale.x * bump, (y + shelf) * scale.y, z * scale.z * bump)
+        .applyMatrix4(rotation).add(center);
       positions.push(point.x, point.y, point.z);
       const [u, v] = atlasUv(uv.getX(i), uv.getY(i), tile);
       uvs.push(u, v);
@@ -300,6 +311,19 @@ function makeCrown(lod: CrownLod, visualTier: VegetationVisualTier): THREE.Buffe
   result.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   result.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   result.setIndex(indices);
+  // A cell swaps this geometry between LODs without changing instance matrices.
+  // Give every silhouette the same vertical extent so all tiers stay inside
+  // the simulation's crown contact band.
+  result.computeBoundingBox();
+  const bounds = result.boundingBox!;
+  const midpoint = (bounds.min.y + bounds.max.y) * .5;
+  const halfHeight = (bounds.max.y - bounds.min.y) * .5;
+  const crownPositions = result.getAttribute('position') as THREE.BufferAttribute;
+  for (let i = 0; i < crownPositions.count; i++) {
+    crownPositions.setY(i, (crownPositions.getY(i) - midpoint) / halfHeight);
+  }
+  crownPositions.needsUpdate = true;
+  result.boundingBox = null;
   result.computeVertexNormals();
   return result;
 }
@@ -756,11 +780,12 @@ export function createVegetation(
 
     for (let i = 0; i < crowns.length; i++) {
       const plant = crowns[i];
-      const [width, height, depth] = canopyProfiles[plant.species];
-      const crownHeight = plant.ground + plant.height * (plant.species === 'secondary' ? .9 : .88);
+      const [width, , depth] = canopyProfiles[plant.species];
+      const crownHeight = plant.ground + plant.height * .96 + plant.radius * .125;
+      const crownVerticalScale = plant.radius * 1.225;
       dummy.position.set(plant.point.x, crownHeight, plant.point.z);
       dummy.rotation.set(0, plant.yaw, 0);
-      dummy.scale.set(plant.radius * width, plant.radius * height, plant.radius * depth);
+      dummy.scale.set(plant.radius * width, crownVerticalScale, plant.radius * depth);
       dummy.updateMatrix();
       crown.setMatrixAt(i, dummy.matrix);
       crown.setColorAt(i, plant.leaves);
@@ -807,10 +832,11 @@ export function createVegetation(
     for (let i = 0; i < charredPlants.length; i++) {
       const plant = charredPlants[i];
       const [width, height, depth] = canopyProfiles[plant.species];
-      const crownHeight = plant.ground + plant.height * (plant.species === 'secondary' ? .9 : .88);
+      const crownHeight = plant.ground + plant.height * .96 + plant.radius * .125;
+      const crownVerticalScale = plant.radius * 1.225 * Math.min(1, height);
       dummy.position.set(plant.point.x, crownHeight, plant.point.z);
       dummy.rotation.set(0, plant.yaw, 0);
-      dummy.scale.set(plant.radius * width, plant.radius * height, plant.radius * depth);
+      dummy.scale.set(plant.radius * width, crownVerticalScale, plant.radius * depth);
       dummy.updateMatrix();
       deadBranches.setMatrixAt(i, dummy.matrix);
       deadBranches.setColorAt(i, plant.bark);

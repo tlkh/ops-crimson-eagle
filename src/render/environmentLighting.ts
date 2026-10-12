@@ -14,10 +14,10 @@ type SkyPalette = {
 // timeOfDay.ts. The scene's sun and ambient lights still carry their exact
 // simulation-time values; the PMREM maps only soften and colour reflections.
 const PALETTES: readonly SkyPalette[] = [
-  { name: 'night', zenith: [.027,.038,.066], horizon: [.043,.052,.073], sun: [.30,.32,.43], sunDirection: [.82,-.04,.57] },
-  { name: 'dawn', zenith: [.052,.056,.074], horizon: [.085,.068,.062], sun: [.46,.34,.27], sunDirection: [.96,.12,.28] },
-  { name: 'day', zenith: [.078,.112,.146], horizon: [.095,.115,.112], sun: [.51,.48,.40], sunDirection: [.78,.66,.48] },
-  { name: 'dusk', zenith: [.056,.052,.070], horizon: [.087,.067,.060], sun: [.46,.33,.26], sunDirection: [-.96,.12,.28] },
+  { name: 'night', zenith: [.036,.053,.095], horizon: [.058,.078,.112], sun: [.32,.39,.54], sunDirection: [.82,-.04,.57] },
+  { name: 'dawn', zenith: [.085,.095,.15], horizon: [.19,.14,.15], sun: [.60,.39,.29], sunDirection: [.96,.12,.28] },
+  { name: 'day', zenith: [.14,.24,.35], horizon: [.25,.34,.39], sun: [.66,.60,.48], sunDirection: [.78,.66,.48] },
+  { name: 'dusk', zenith: [.085,.095,.15], horizon: [.19,.14,.15], sun: [.60,.39,.29], sunDirection: [-.96,.12,.28] },
 ];
 
 export type EnvironmentLighting = {

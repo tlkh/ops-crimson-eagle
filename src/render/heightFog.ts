@@ -3,8 +3,9 @@ import * as THREE from 'three';
 /** Add ground-layer aerial perspective without a postprocessing pass or fog planes. */
 export function createHeightFog(japanese: boolean) {
   const patched = new WeakSet<THREE.Material>();
+  // Keep the route and bucket legible; the low layer gathers over kilometres.
   // Extinction per metre, inverse layer height, clear foreground, maximum mix.
-  const settings = { value: new THREE.Vector4(japanese ? .00135 : .0012, 1 / 190, 65, .48) };
+  const settings = { value: new THREE.Vector4(japanese ? .00062 : .00054, 1 / 230, 145, .32) };
 
   return {
     apply(root: THREE.Object3D) {

@@ -108,18 +108,22 @@ const fragmentShader = /* glsl */`
   }
   vec2 wave(vec2 p, vec2 d, float k, float speed, float slope) {
     vec3 swell = noiseGradient(p*.075+d*11.0);
-    float phase = dot(p,d)*k-time*speed + swell.x*5.0;
+    float phase = dot(p,d)*k-time*speed + swell.x*6.0;
     // Analytically fade waves smaller than a pixel, preventing horizon moire.
     float footprint = length(vec2(dFdx(phase),dFdy(phase)));
-    return (d+swell.yz*.375/k) * cos(phase) * slope * exp(-footprint*footprint*.5);
+    // Groups of crests appear and die across the surface instead of forming
+    // evenly spaced lines that continue to the horizon.
+    float group = smoothstep(.25,.78,swell.x);
+    return (d+swell.yz*.40/k) * cos(phase) * slope * (.22+.78*group) * exp(-footprint*footprint*.5);
   }
   float wash(vec2 p, vec3 source, out vec2 slope) {
     vec2 d = p-source.xy; float radius = length(d);
-    float ring = exp(-pow((radius-10.5)/6.5,2.0));
-    float outer = exp(-pow((radius-18.0)/15.0,2.0));
-    float ripple = sin(radius*2.2-time*13.0 + noise(p*.35)*1.6);
-    slope = d/max(radius,.1) * ripple * outer * source.z * .22;
-    return ring * source.z * (.35+.65*noise(p*1.5-time*.9));
+    float broken = noise(p*.19-time*.32);
+    float ring = exp(-pow((radius-11.0)/7.0,2.0));
+    float outer = exp(-pow((radius-18.0)/14.0,2.0));
+    float ripple = sin(radius*1.7-time*11.0+broken*3.2);
+    slope = d/max(radius,.1) * ripple * outer * source.z * (.09+.09*broken);
+    return ring * source.z * smoothstep(.40,.79,broken) * .55;
   }
   float lakeRadiusFactor(float angle) {
     vec4 first = vec4(cos(angle),sin(angle),cos(2.0*angle),sin(2.0*angle));
@@ -134,7 +138,7 @@ const fragmentShader = /* glsl */`
     float sea = 1.0-step(.5,kind);
     vec2 direction = normalize(wind+vec2(.001));
     vec2 crosswind = vec2(-direction.y,direction.x);
-    float strength = mix(.23,1.0,sea);
+    float strength = mix(.15,1.0,sea);
     float fine = 1.0-smoothstep(80.0,700.0,distanceToEye);
     // Slowly changing flow bends the otherwise parallel wave trains into broad
     // patches. The lake uses a tighter, quieter warp than open sea.
@@ -143,16 +147,16 @@ const fragmentShader = /* glsl */`
       noise(domainUv+vec2(2.7,6.1)),
       noise(domainUv+vec2(8.3,1.9))
     )-.5;
-    float warpScale = mix(2.0,11.0,sea);
+    float warpScale = mix(3.0,15.0,sea);
     vec2 wavePosition = p + domain*warpScale;
     vec2 flowDirection = normalize(direction + domain*mix(.075,.30,sea));
     vec2 flowCrosswind = vec2(-flowDirection.y,flowDirection.x);
-    vec2 slope = wave(wavePosition,flowDirection,.075,.34,.075)*strength;
-    slope += wave(wavePosition+domain*4.0,normalize(flowDirection+flowCrosswind*.46),.20,.64,.075)*strength;
-    slope += wave(wavePosition-domain*3.0,normalize(flowDirection-flowCrosswind*.72),.54,1.08,.059)*strength;
-    slope += wave(wavePosition,flowCrosswind,1.55,1.55,.039)*fine*mix(.5,1.0,sea);
-    slope += wave(wavePosition+domain,normalize(flowDirection+flowCrosswind*.32),3.9,2.2,.027)*fine*mix(.5,1.0,sea);
-    slope += wave(wavePosition+domain*1.7,normalize(flowDirection-flowCrosswind*.21),8.0,3.0,.013)*fine*mix(.5,1.0,sea);
+    vec2 slope = wave(wavePosition,flowDirection,mix(.18,.075,sea),mix(.42,.34,sea),.075)*strength;
+    slope += wave(wavePosition+domain*4.0,normalize(flowDirection+flowCrosswind*.46),mix(.52,.20,sea),.64,.075)*strength;
+    slope += wave(wavePosition-domain*3.0,normalize(flowDirection-flowCrosswind*.72),mix(1.2,.54,sea),1.08,.059)*strength;
+    slope += wave(wavePosition,flowCrosswind,1.55,1.55,.039)*fine*mix(.27,1.0,sea);
+    slope += wave(wavePosition+domain,normalize(flowDirection+flowCrosswind*.32),3.9,2.2,.027)*fine*mix(.30,1.0,sea);
+    slope += wave(wavePosition+domain*1.7,normalize(flowDirection-flowCrosswind*.21),8.0,3.0,.013)*fine*mix(.35,1.0,sea);
     float grain = noise(p*.37-direction*time*.24);
     slope *= mix(.87+grain*.24,.72+grain*.52,sea);
 
@@ -188,7 +192,8 @@ const fragmentShader = /* glsl */`
     float across = dot(p-coast.xy,vec2(-coast.w,coast.z));
     float beachDistance = coastStart+34.0*sin(across*.003)+19.0*sin(across*.008+.5)-along;
     foam += exp(-pow((beachDistance-2.5-sin(time*.8+across*.027)*1.8)/2.5,2.0))*sea*.26;
-    foam += margin*(.10+.12*sin(time*1.5+angle*41.0));
+    float lakeLapping = .5+.5*sin(time*1.1+angle*37.0+noise(p*.045)*3.0);
+    foam += margin*(.045+.09*lakeLapping)*smoothstep(.25,.72,noise(p*.12+time*.018));
 
     vec3 normal = normalize(vec3(-slope.x,1.0,-slope.y));
     float facing = max(.0,dot(view,normal));
@@ -200,7 +205,7 @@ const fragmentShader = /* glsl */`
     vec2 reflectionUv = clamp(projected+distortion,vec2(.002),vec2(.998));
     float validUv = step(.001,projected.x)*step(projected.x,.999)*step(.001,projected.y)*step(projected.y,.999);
     vec3 reflection = mix(sky,texture2D(tDiffuse,reflectionUv).rgb,reflectionReady*validUv);
-    vec3 base = color*mix(.94+grain*.12,.83+grain*.26,sea);
+    vec3 base = color*mix(.91+grain*.10,.83+grain*.26,sea);
     base = mix(base,vec3(.12,.23,.19),margin*.5);
     float shallow = sea * (1.0-smoothstep(0.0,100.0,max(0.0,beachDistance)));
     vec3 sediment = mix(vec3(.18,.19,.12), vec3(.28,.27,.18),noise(p*.085));

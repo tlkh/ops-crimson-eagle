@@ -181,36 +181,30 @@ function makeInstancedParticles(
       shader.uniforms.fireSunColor = { value: lighting.sunColor };
       shader.uniforms.fireAmbientColor = { value: lighting.ambientColor };
       shader.uniforms.fireSunIntensity = lighting.sunIntensity;
-      shader.vertexShader = `varying vec3 vParticleWorldPosition;\n${shader.vertexShader}`
-        .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
-          // MeshBasicMaterial does not always enable Three's worldPosition
-          // chunk (for example without shadow or environment defines at night).
-          vec4 particleWorldPosition = vec4(transformed, 1.0);
-          #ifdef USE_INSTANCING
-            particleWorldPosition = instanceMatrix * particleWorldPosition;
-          #endif
-          vParticleWorldPosition = (modelMatrix * particleWorldPosition).xyz;`);
       shader.fragmentShader = `
         uniform vec3 fireSunDirection;
         uniform vec3 fireSunColor;
         uniform vec3 fireAmbientColor;
         uniform float fireSunIntensity;
-        varying vec3 vParticleWorldPosition;
       ` + shader.fragmentShader.replace(
         '#include <color_fragment>',
         `#include <color_fragment>
-         vec3 particleNormal = normalize(cross(dFdx(vParticleWorldPosition), dFdy(vParticleWorldPosition)));
-         float sunFacing = abs(dot(particleNormal, normalize(fireSunDirection)));
-         float particleLight = 0.72 + 0.28 * sunFacing * clamp(fireSunIntensity, 0.0, 1.0);
-         vec3 smokeTint = mix(vec3(0.65, 0.68, 0.72), fireAmbientColor, 0.46);
-         smokeTint = mix(smokeTint, fireSunColor, 0.10 * clamp(fireSunIntensity, 0.0, 1.0));
+         // A soft volume normal varies across each atlas tile. Lighting a flat
+         // card with its single geometric normal made every puff a flat disc.
+         vec2 tileUv = fract(vMapUv * 2.0) * 2.0 - 1.0;
+         vec3 particleNormal = normalize(vec3(tileUv, sqrt(max(0.12, 1.0 - dot(tileUv, tileUv)))));
+         vec3 sunInView = normalize(mat3(viewMatrix) * fireSunDirection);
+         float sunFacing = clamp(dot(particleNormal, sunInView) * 0.5 + 0.5, 0.0, 1.0);
+         float particleLight = 0.62 + 0.56 * sunFacing * clamp(fireSunIntensity, 0.0, 1.0);
+         vec3 smokeTint = mix(vec3(0.55, 0.59, 0.63), fireAmbientColor, 0.42);
+         smokeTint = mix(smokeTint, fireSunColor, 0.12 * clamp(fireSunIntensity, 0.0, 1.0));
          diffuseColor.rgb *= smokeTint * particleLight;`,
       );
     }
     shader.fragmentShader = `varying float vInstanceOpacity;\n${shader.fragmentShader}`
       .replace('#include <map_fragment>', '#include <map_fragment>\ndiffuseColor.a *= vInstanceOpacity;');
   };
-  material.customProgramCacheKey = () => `instanced-particle-opacity-atlas-${atlasColumns}-light-${Boolean(lighting)}-v3`;
+  material.customProgramCacheKey = () => `instanced-particle-opacity-atlas-${atlasColumns}-light-${Boolean(lighting)}-v4`;
   const mesh = new THREE.InstancedMesh(geometry, material, count);
   mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   mesh.frustumCulled = false;
@@ -231,11 +225,15 @@ export function setGroundedFlameTransform(
   x: number, groundY: number, z: number,
   width: number, height: number,
   cameraPosition?: THREE.Vector3,
+  boundary?: Pick<Mission['fire'], 'x' | 'z' | 'radius'>,
 ) {
   object.position.set(x, groundY + height * .5, z);
   const dx = (cameraPosition?.x ?? x) - x, dz = (cameraPosition?.z ?? z + 1) - z;
   object.rotation.set(0, dx * dx + dz * dz > .0001 ? Math.atan2(dx, dz) : 0, 0);
-  object.scale.set(width, height, 1);
+  // Bound the complete upright card, including pulse width, for every camera
+  // bearing. A center inside the circle alone does not contain its edges.
+  const radialRoom = boundary ? Math.max(0, boundary.radius - Math.hypot(x - boundary.x, z - boundary.z)) : Infinity;
+  object.scale.set(Math.min(width, radialRoom * 2), height, 1);
   object.updateMatrix();
 }
 
@@ -363,16 +361,25 @@ export function createFire(
   const radius = clamp(mission.fire.radius, 40, 5500);
 
   const flames: Flame[] = [];
-  const flameCount = Math.round(clamp(radius / 2.4, 30, 60));
-  const flameSites = selectFireSites(mission, burnField, flameCount, mission.seed + 811);
+  const flameCount = Math.round(clamp(radius / 1.7, 44, 84));
+  const flameSites = selectFireSites(mission, burnField, Math.ceil(flameCount / 2), mission.seed + 811);
   for (let i = 0; i < flameCount; i++) {
-    const site = flameSites[i] ?? { x: mission.fire.x, z: mission.fire.z, severity: 0, age: 0, activity: 0 };
+    const site = flameSites[Math.floor(i / 2)] ?? { x: mission.fire.x, z: mission.fire.z, severity: 0, age: 0, activity: 0 };
+    const pair = i % 2;
+    const tangent = Math.atan2(site.z - mission.fire.z, site.x - mission.fire.x) + Math.PI * .5;
+    const offset = pair ? 1.8 + rand() * Math.min(3.8, radius * .035) : 0;
+    const candidateX = site.x + Math.cos(tangent) * offset;
+    const candidateZ = site.z + Math.sin(tangent) * offset;
+    const withinFire = Math.hypot(candidateX - mission.fire.x, candidateZ - mission.fire.z) <= radius * .96;
+    const x = withinFire && fieldEligible(burnField, candidateX, candidateZ) ? candidateX : site.x;
+    const z = withinFire && fieldEligible(burnField, candidateX, candidateZ) ? candidateZ : site.z;
     flames.push({
       ...site,
-      width: 4 + rand() * 6,
-      height: 3 + rand() * 7,
+      x, z,
+      width: pair ? 2.8 + rand() * 4.5 : 5 + rand() * 5.5,
+      height: pair ? 2.5 + rand() * 5 : 4.5 + rand() * 7.5,
       phase: rand() * TAU,
-      color: new THREE.Color().setHSL(.10 + rand() * .015, .08, .88),
+      color: new THREE.Color().setHSL(.075 + rand() * .025, .25 + rand() * .2, .82 + rand() * .11),
     });
   }
 
@@ -401,19 +408,24 @@ export function createFire(
     y: terrainHeight(source.x, source.z) + 2,
     residual: clamp(source.severity * (.24 + source.age * .48), 0, 1),
   }));
+  const plumeSources = smokeSources.filter(source => !source.residualOnly && source.activity > 0);
+  const plumeCenterX = plumeSources.length
+    ? plumeSources.reduce((total, source) => total + source.x, 0) / plumeSources.length : mission.fire.x;
+  const plumeCenterZ = plumeSources.length
+    ? plumeSources.reduce((total, source) => total + source.z, 0) / plumeSources.length : mission.fire.z;
   const smoke: SmokePuff[] = [];
   for (let source = 0; source < smokeSourceCount; source++) {
     for (let puff = 0; puff < 4; puff++) {
-      const shade = .055 + rand() * .065;
+      const shade = .14 + rand() * .075;
       smoke.push({
         source,
         phase: puff / 4 + rand() * .08,
-        size: 19 + rand() * 25,
-        height: 90 + rand() * 115,
+        size: 18 + rand() * 18,
+        height: 70 + rand() * 85,
         tint: new THREE.Color(shade, shade * (mission.peat ? 1.01 : .98), shade * .91),
       });
     }
-    smoke.push({ source, phase: rand(), size: 28 + rand() * 19, height: 14 + rand() * 9, tint: new THREE.Color(.10, .105, .09), low: true });
+    smoke.push({ source, phase: rand(), size: 21 + rand() * 15, height: 14 + rand() * 9, tint: new THREE.Color(.19, .185, .17), low: true });
   }
 
   const emberSites = selectFireSites(mission, burnField, 20, mission.seed + 1207);
@@ -493,10 +505,11 @@ export function createFire(
       const residual = fireActive
         ? activity
         : Math.max(clamp(factor * (mission.peat ? .16 : .11), 0, mission.peat ? .18 : .12), peatResidual);
-      const delta = Math.max(0, Math.min(.5, timeSec - lastTime));
+      const reversed = timeSec < lastTime;
+      const delta = reversed ? 0 : Math.max(0, Math.min(.5, timeSec - lastTime));
       const surfaceHeat = state?.fireHeat ?? heat;
-      const cooling = Math.max(0, (lastHeat ?? surfaceHeat) - surfaceHeat);
-      steamStrength = Math.max(steamStrength * Math.exp(-delta * .46), cooling > .005 ? clamp(cooling * 3, .08, .84) : 0);
+      const cooling = reversed ? 0 : Math.max(0, (lastHeat ?? surfaceHeat) - surfaceHeat);
+      steamStrength = reversed ? 0 : Math.max(steamStrength * Math.exp(-delta * .46), cooling > .005 ? clamp(cooling * 3, .08, .84) : 0);
       lastHeat = surfaceHeat;
       lastTime = timeSec;
       const facing = camera?.quaternion ?? fallbackQuaternion;
@@ -512,12 +525,14 @@ export function createFire(
         const localActivity = flame.activity > 0 ? activity * (.2 + .8 * flame.activity) : 0;
         const pulse = .86 + .13 * Math.sin(timeSec * 5.7 + flame.phase) + .08 * Math.sin(timeSec * 9.9 + flame.phase * 2.3);
         const stretch = .55 + localActivity * .72;
-        const flameX = flame.x + Math.sin(timeSec * 2.1 + flame.phase) * 1.8;
+        const radialRoom = Math.max(0, radius - Math.hypot(flame.x - mission.fire.x, flame.z - mission.fire.z));
+        const flameX = flame.x + Math.sin(timeSec * 2.1 + flame.phase) * Math.min(1.8, radialRoom * .22);
         setGroundedFlameTransform(
           dummy,
           flameX, terrainHeight(flameX, flame.z) + .03, flame.z,
           flame.width * stretch * pulse, flame.height * (.45 + localActivity * .78) * pulse,
           camera?.position,
+          mission.fire,
         );
         flameParticles.mesh.setMatrixAt(i, dummy.matrix);
         flameParticles.opacity.setX(i, localActivity * .9 * nightGlow);
@@ -525,16 +540,24 @@ export function createFire(
       flameParticles.mesh.instanceMatrix.needsUpdate = true;
       flameParticles.opacity.needsUpdate = true;
 
+      const windLength = Math.max(.001, Math.hypot(wind.x, wind.z));
+      const crosswindX = -wind.z / windLength;
+      const crosswindZ = wind.x / windLength;
       for (let i = 0; i < activeSmokeCount; i++) {
         const puff = smoke[i];
         const source = smokeSources[puff.source];
         const life = (timeSec * (puff.low ? .055 : .065) + puff.phase) % 1;
-        const spread = 5 + life * 28;
-        const swirl = Math.sin(timeSec * 1.35 + puff.phase * TAU) * spread * .52;
-        const driftX = wind.x * life * 25 - wind.z * life * 5 + swirl;
-        const driftZ = wind.z * life * 25 + wind.x * life * 5 + Math.cos(timeSec * 1.1 + puff.phase * TAU) * spread * .42;
-        const puffyScale = .65 + life * 1.75;
-        dummy.position.set(source.x + driftX, source.y + (puff.low ? 3 : 10) + life * puff.height, source.z + driftZ);
+        // Neighboring source streams converge aloft into one wind-shaped
+        // column; residual low smoke stays above its old charred source.
+        const merge = puff.low || source.residualOnly ? 0 : .55 * Math.pow(life, .7);
+        const lateral = Math.sin(puff.phase * TAU * 2.3 + puff.source * 1.7) * (2 + life * 8);
+        const drift = puff.low ? 4 : 19;
+        const puffyScale = .68 + life * (puff.low ? .55 : 1.22);
+        dummy.position.set(
+          source.x + (plumeCenterX - source.x) * merge + wind.x * life * drift + crosswindX * lateral,
+          source.y + (puff.low ? 3 : 10) + life * puff.height,
+          source.z + (plumeCenterZ - source.z) * merge + wind.z * life * drift + crosswindZ * lateral,
+        );
         dummy.quaternion.copy(facing);
         dummy.scale.set(puff.size * puffyScale * 1.18, puff.size * puffyScale, 1);
         dummy.updateMatrix();

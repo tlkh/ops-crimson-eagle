@@ -19,9 +19,9 @@ describe('cinematic effect strengths', () => {
     expect(getCinematicEffectStrengths(options()).vignette).toBeCloseTo(.08);
     expect(getCinematicEffectStrengths(options({ nightStrength: 1, isPhone: true }))).toMatchObject({
       vignette: .05,
-      edgeBlurCssPixels: .75,
+      edgeBlurCssPixels: .10,
     });
-    expect(getCinematicEffectStrengths(options()).edgeBlurCssPixels).toBe(1.25);
+    expect(getCinematicEffectStrengths(options()).edgeBlurCssPixels).toBe(.20);
   });
 
   it('ramps motion blur from 40 to 100 km/h and observes desktop/phone caps', () => {
@@ -41,9 +41,9 @@ describe('cinematic effect strengths', () => {
     const fastVelocity = { x: 100 / 3.6, y: 0, z: 0 };
     const reduced = getCinematicEffectStrengths(options({ reducedMotion: true, velocity: fastVelocity }));
     const paused = getCinematicEffectStrengths(options({ paused: true, velocity: fastVelocity }));
-    expect(reduced).toMatchObject({ vignette: .08, edgeBlurCssPixels: 1.25, motionBlurCssPixels: 0, motionBlend: 0 });
+    expect(reduced).toMatchObject({ vignette: .08, edgeBlurCssPixels: .20, motionBlurCssPixels: 0, motionBlend: 0 });
     expect(paused.motionBlurCssPixels).toBe(0);
-    expect(paused.edgeBlurCssPixels).toBe(1.25);
+    expect(paused.edgeBlurCssPixels).toBe(.20);
   });
 
   it('zeros all effects when disabled', () => {

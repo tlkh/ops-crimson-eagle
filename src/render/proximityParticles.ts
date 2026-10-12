@@ -5,6 +5,7 @@ import { bucketSurfaceHeight, LAKE_SURFACE_M } from '../sim/bucket';
 import { createCoastalSampler } from './coastalSampling';
 import { evaluateTimeOfDay } from './timeOfDay';
 import { shipToLocal } from '../sim/shipLanding';
+import { isWithinLakeOutline } from '../sim/lakeShape';
 
 const PARTICLE_CAPACITY = 128;
 const PHONE_PARTICLE_CAPACITY = 64;
@@ -112,10 +113,8 @@ function inDeckBounds(campaign: Campaign, mission: Mission, x: number, z: number
     localZ >= stern - campaign.shipLength && localZ <= stern;
 }
 
-function isInsideLake(mission: Mission, x: number, z: number): boolean {
-  const dx = x - mission.lake.x;
-  const dz = z - mission.lake.z;
-  return dx * dx + dz * dz <= mission.lake.radius * mission.lake.radius;
+function isInsideLake(campaign: Campaign, mission: Mission, x: number, z: number): boolean {
+  return isWithinLakeOutline(campaign.id, mission.lake, { x, z });
 }
 
 function pulse(time: number, phase: number, period: number, burst: number): number {
@@ -188,14 +187,15 @@ export function createProximityParticles(scene: THREE.Scene, campaign: Campaign,
     periods[i] = kind === KIND_SPRAY ? 2.2 + random() * 2.5 : kind === KIND_EMBER ? 8 + random() * 7 : 4.5 + random() * 7.5;
     bursts[i] = kind === KIND_SPRAY ? .65 + random() * .9 : kind === KIND_EMBER ? .9 + random() * .9 : 1.5 + random() * 2.2;
     const angle = random() * TAU;
-    const radial = Math.sqrt(random()) * (kind === KIND_DUST || kind === KIND_DECK_DUST ? ROTOR_RADIUS_M : kind === KIND_SPRAY ? 6.5 : 10);
+    const radial = kind === KIND_SPRAY ? 7 + random() * 5
+      : Math.sqrt(random()) * (kind === KIND_DUST || kind === KIND_DECK_DUST ? ROTOR_RADIUS_M : 10);
     localX[i] = Math.cos(angle) * radial;
     localZ[i] = Math.sin(angle) * radial;
     riseRates[i] = kind === KIND_ASH ? .32 + random() * .42 : kind === KIND_EMBER ? 1.05 + random() * .65 : kind === KIND_SPRAY ? .18 + random() * .28 : .12 + random() * .5;
     opacityScale[i] = kind === KIND_DECK_DUST ? .58 + random() * .4 : kind === KIND_EMBER ? .48 + random() * .28 : .72 + random() * .28;
     sizes[i] = kind === KIND_DUST ? .34 + random() * .42 :
       kind === KIND_DECK_DUST ? .24 + random() * .28 :
-        kind === KIND_SPRAY ? .24 + random() * .3 :
+        kind === KIND_SPRAY ? .33 + random() * .32 :
           kind === KIND_EMBER ? .15 + random() * .12 : .25 + random() * .26;
     const palette = kind === KIND_DUST ? colorDust : kind === KIND_DECK_DUST ? colorDeck : kind === KIND_SPRAY ? colorSpray : kind === KIND_EMBER ? [colorEmber] : colorAsh;
     const color = palette[Math.floor(random() * palette.length)];
@@ -234,7 +234,7 @@ export function createProximityParticles(scene: THREE.Scene, campaign: Campaign,
     const sample = surfaceScratch[rotor];
     sampler.sampleInto(x, z, sample);
     const deck = inDeckBounds(campaign, mission, x, z);
-    const lake = isInsideLake(mission, x, z);
+    const lake = isInsideLake(campaign, mission, x, z);
     const surfaceY = deck ? DECK_SURFACE_Y : lake ? LAKE_SURFACE_M : bucketSurfaceHeight(campaign, mission, x, z);
     rotorSurface[rotor] = surfaceY;
     if (deck) rotorSurfaceKind[rotor] = SURFACE_DECK;
@@ -300,7 +300,7 @@ export function createProximityParticles(scene: THREE.Scene, campaign: Campaign,
         const nearFireX = state.position.x - mission.fire.x;
         const nearFireZ = state.position.z - mission.fire.z;
         const fireInRange = nearFireX * nearFireX + nearFireZ * nearFireZ <= 190 * 190;
-        const waterFetch = extended.fetching === true && extended.bucketAttached === true && isInsideLake(mission, state.bucket.x, state.bucket.z);
+        const waterFetch = extended.fetching === true && extended.bucketAttached === true && isInsideLake(campaign, mission, state.bucket.x, state.bucket.z);
         const lakeWaterY = LAKE_SURFACE_M;
 
         for (let i = 0; i < budget; i++) {
@@ -343,7 +343,7 @@ export function createProximityParticles(scene: THREE.Scene, campaign: Campaign,
               const headingZ = -localX[i] * sinHeading + localZ[i] * cosHeading;
               x = anchorX + headingX * (waterFetch ? .24 : 1) + state.velocity.x * particleAge * .015;
               z = anchorZ + headingZ * (waterFetch ? .24 : 1) + state.velocity.z * particleAge * .015;
-              const inLake = isInsideLake(mission, x, z);
+              const inLake = isInsideLake(campaign, mission, x, z);
               let overShallowWater = false;
               if (!inLake && coastSpray && !waterFetch) {
                 sampler.toLocalInto(x, z, coastalScratch);

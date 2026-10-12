@@ -22,6 +22,23 @@ function makeField(sample: BurnField['sample']): BurnField {
 }
 
 describe('fire field placement', () => {
+  it('contains the full width of pulsing edge flames inside the suppression circle from every bearing', () => {
+    const card = new THREE.Object3D();
+    for (const radius of [30, 85, 140]) for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 6) {
+      const boundary = { x: 27, z: -14, radius };
+      const x = boundary.x + Math.cos(angle) * radius * .975;
+      const z = boundary.z + Math.sin(angle) * radius * .975;
+      for (let cameraAngle = 0; cameraAngle < Math.PI * 2; cameraAngle += Math.PI / 4) {
+        const camera = new THREE.Vector3(x + Math.cos(cameraAngle) * 100, 50, z + Math.sin(cameraAngle) * 100);
+        setGroundedFlameTransform(card, x, 1, z, 15, 12, camera, boundary);
+        for (const side of [-.5, .5]) {
+          const edge = new THREE.Vector3(side, -.5, 0).applyMatrix4(card.matrix);
+          expect(Math.hypot(edge.x - boundary.x, edge.z - boundary.z)).toBeLessThanOrEqual(radius + 1e-6);
+        }
+      }
+    }
+  });
+
   it('keeps flame feet on terrain and cards upright as chase camera elevation changes', () => {
     const card = new THREE.Object3D();
     const terrainY = 12.4;

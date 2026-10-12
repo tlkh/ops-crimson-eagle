@@ -19,7 +19,10 @@ quality, lowers water reflection resolution/cadence before scene resolution,
 and uses a sustained three-second load window after warm-up. Recovery requires
 30 seconds of stable timing. High locks detail; Battery disables reflections
 and cinematic processing, lowers shadow size and renders at 70% scale. Scene
-DPR is capped at 1.5 and its long edge at 1440 pixels; the DOM HUD stays native.
+DPR is capped at 1.5. Auto, Battery and phone High retain the 1440-pixel
+long-edge limit; desktop High allows 1920 pixels and a 2048-square shadow map.
+The DOM HUD stays native. Desktop High is an explicit quality choice, not a
+claim that every GPU can sustain 60 FPS at that setting.
 
 Vegetation uses 12 spatial batches and camera-distance crown geometry, including
 clustered near crowns and shared bark/foliage atlases. All 20,000 tree trunks

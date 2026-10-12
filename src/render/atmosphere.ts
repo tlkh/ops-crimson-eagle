@@ -131,12 +131,13 @@ function makeCloudLayer(count: number, texture: THREE.Texture, opacity: number, 
        vec3 cloudNormal = normalize(-vCloudPlaneNormal - cloudSlope.x * vCloudAxisX - cloudSlope.y * vCloudAxisY);
        vec3 sunVector = normalize(cloudSunDirection);
        float cloudLight = max(dot(cloudNormal, sunVector), 0.0);
-       float cloudBackScatter = max(dot(-cloudNormal, sunVector), 0.0) * (0.18 + cloudCenter * 0.12);
+       float cloudBackScatter = max(dot(-cloudNormal, sunVector), 0.0) * (0.15 + cloudCenter * 0.10);
        float cloudLit = cloudLight + cloudBackScatter;
-       float cloudRim = pow(clamp(cloudLight, 0.0, 1.0), 2.4);
-       vec3 cloudFill = cloudAmbientColor * 0.74 + cloudSunColor * cloudSunIntensity * (0.10 + 0.26 * cloudLit);
-       cloudFill += cloudSunColor * cloudSunIntensity * cloudRim * 0.10;
-       cloudFill *= 1.0 - smoothstep(0.55, 0.96, cloudCenter) * 0.10;
+       float cloudRim = pow(clamp(cloudLight, 0.0, 1.0), 2.2);
+       vec3 cloudFill = cloudAmbientColor * 0.80 + cloudSunColor * cloudSunIntensity * (0.08 + 0.32 * cloudLit);
+       cloudFill += cloudSunColor * cloudSunIntensity * cloudRim * 0.13;
+       cloudFill *= 1.0 - smoothstep(0.45, 0.96, cloudCenter) * 0.15;
+       cloudFill *= 0.48 + 0.52 * clamp(cloudSunIntensity, 0.0, 1.0);
        diffuseColor.rgb *= cloudFill;`,
     );
   };
@@ -159,7 +160,7 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
   const jp = campaign.id === 'jp_ketapang_2026_09';
   const initialTime = evaluateTimeOfDay(mission, 0);
   const horizonColor = colorFromRgb(initialTime.skyHorizon);
-  scene.fog = new THREE.FogExp2(colorFromRgb(initialTime.fogColor), jp ? .00016 : .00013);
+  scene.fog = new THREE.FogExp2(colorFromRgb(initialTime.fogColor), jp ? .000105 : .00009);
   const sky = new THREE.Mesh(new THREE.SphereGeometry(60000, 32, 16), new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
@@ -170,6 +171,7 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
       sunDirection: { value: new THREE.Vector3(...initialTime.sunDirection) },
       sunColor: { value: colorFromRgb(initialTime.sunColor) },
       sunVisibility: { value: THREE.MathUtils.smoothstep(initialTime.sunDirection[1], -.025, .03) },
+      horizonGlow: { value: 0 },
     },
     vertexShader: 'varying vec3 direction; void main(){ direction=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }',
     fragmentShader: `
@@ -179,12 +181,17 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
       uniform vec3 sunDirection;
       uniform vec3 sunColor;
       uniform float sunVisibility;
+      uniform float horizonGlow;
       void main() {
         vec3 d = normalize(direction);
         float upper = pow(max(d.y, 0.0), .48);
         vec3 skyColor = mix(horizon, zenith, upper);
         float hazeBand = exp(-max(d.y, 0.0) * 15.0);
-        skyColor = mix(skyColor, horizon, hazeBand * .43);
+        skyColor = mix(skyColor, horizon, hazeBand * .28);
+        vec3 horizonDirection = normalize(vec3(d.x + 0.000001, 0.0, d.z));
+        vec3 solarAzimuth = normalize(vec3(sunDirection.x, 0.0, sunDirection.z));
+        float warmArc = pow(max(dot(horizonDirection, solarAzimuth), 0.0), 5.0);
+        skyColor += sunColor * warmArc * exp(-abs(d.y) * 6.5) * horizonGlow * .22;
         float sun = max(dot(d, sunDirection), 0.0) * sunVisibility;
         skyColor += sunColor * pow(sun, 15.0) * .09;
         skyColor += sunColor * pow(sun, 180.0) * .72;
@@ -208,7 +215,7 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
   });
   const lowCloudLighting = makeCloudLighting();
   const highCloudLighting = makeCloudLighting();
-  const lowClouds = makeCloudLayer(48, lowTexture, .52, true, lowCloudLighting);
+  const lowClouds = makeCloudLayer(72, lowTexture, .40, true, lowCloudLighting);
   const highClouds = makeCloudLayer(30, highTexture, .30, true, highCloudLighting);
   const lowCloudMaterial = lowClouds.material as THREE.MeshBasicMaterial;
   const highCloudMaterial = highClouds.material as THREE.MeshBasicMaterial;
@@ -218,20 +225,35 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
   const centerX = mission.fire.x;
   const centerZ = mission.fire.z;
 
-  // Cumulus fragments gather into broad, imperfect banks over and beyond the route.
-  for (let i = 0; i < 48; i++) {
-    const bank = Math.floor(i / 8);
+  // Three offset, progressively smaller slices give each cloud a rounded,
+  // shaded body from below. They remain one instanced draw with no animation
+  // or per-frame allocation beyond the shared wind drift.
+  const sliceScales = [1, .82, .59];
+  const sliceShades = [.68, .82, 1];
+  for (let cluster = 0; cluster < 24; cluster++) {
+    const bank = Math.floor(cluster / 4);
     const angle = bank * 2.39996;
     const range = 1800 + (bank % 3) * 2100;
     const clusterX = centerX + Math.cos(angle) * range;
     const clusterZ = centerZ + Math.sin(angle) * range;
-    lowDummy.position.set(clusterX + (rand() - .5) * 1050, 430 + rand() * 180, clusterZ + (rand() - .5) * 800);
-    lowDummy.rotation.set(-Math.PI / 2 + (rand() - .5) * .08, 0, angle + (rand() - .5) * .3);
-    lowDummy.scale.set(650 + rand() * 1050, 390 + rand() * 530, 1);
-    lowDummy.updateMatrix();
-    lowClouds.setMatrixAt(i, lowDummy.matrix);
-    const shade = .82 + rand() * .18;
-    lowClouds.setColorAt(i, new THREE.Color().setRGB(shade, shade * (jp ? .99 : 1), shade * .95));
+    const x = clusterX + (rand() - .5) * 1300;
+    const z = clusterZ + (rand() - .5) * 1050;
+    const y = 390 + rand() * 190;
+    const width = 700 + rand() * 850;
+    const depth = 420 + rand() * 490;
+    const tilt = (rand() - .5) * .20;
+    const spin = angle + (rand() - .5) * .55;
+    for (let slice = 0; slice < 3; slice++) {
+      const i = cluster * 3 + slice;
+      const scale = sliceScales[slice];
+      lowDummy.position.set(x + slice * 75, y + slice * 38, z - slice * 48);
+      lowDummy.rotation.set(-Math.PI / 2 + tilt + slice * .075, 0, spin + slice * .12);
+      lowDummy.scale.set(width * scale, depth * scale, 1);
+      lowDummy.updateMatrix();
+      lowClouds.setMatrixAt(i, lowDummy.matrix);
+      const shade = sliceShades[slice] * (.91 + rand() * .09);
+      lowClouds.setColorAt(i, new THREE.Color().setRGB(shade, shade * (jp ? .98 : 1), shade * .97));
+    }
   }
 
   // Thin upper streaks add a second depth cue while staying faint from the cockpit.
@@ -262,7 +284,7 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
   const baselineDensity = ambientFog.density;
   const windLength = Math.max(.1, Math.hypot(wind.x, wind.z));
   const setQuality = (next: 'high' | 'low') => {
-    lowClouds.count = next === 'high' ? 48 : 25;
+    lowClouds.count = next === 'high' ? 72 : 36;
     highClouds.count = next === 'high' ? 30 : 14;
   };
   return {
@@ -287,13 +309,15 @@ export function createAtmosphere(scene: THREE.Scene, campaign: Campaign, mission
       uniforms.sunDirection.value.copy(sunDirection);
       uniforms.sunColor.value.copy(sunColor);
       uniforms.sunVisibility.value = THREE.MathUtils.smoothstep(timeOfDay.sunDirection[1], -.025, .03);
+      uniforms.horizonGlow.value = Math.exp(-Math.pow(timeOfDay.sunDirection[1] / .22, 2)) *
+        (1 - timeOfDay.nightStrength * .6);
       lowCloudMaterial.color.setRGB(1, 1, 1);
       highCloudMaterial.color.setRGB(1, 1, 1);
-      lowCloudMaterial.opacity = .53 - timeOfDay.nightStrength * .21;
+      lowCloudMaterial.opacity = .40 - timeOfDay.nightStrength * .15;
       highCloudMaterial.opacity = .31 - timeOfDay.nightStrength * .13;
       baseFogColor.setRGB(...timeOfDay.fogColor);
       ambientFog.color.copy(baseFogColor);
-      ambientFog.density = baselineDensity * (1 + timeOfDay.nightStrength * .28);
+      ambientFog.density = baselineDensity * (1 + timeOfDay.nightStrength * .20);
       const drift = Math.min(2600, Math.max(-2600, time * .34));
       lowClouds.position.set(wind.x * drift, 0, wind.z * drift);
       highClouds.position.set(wind.x * drift * .62, 0, wind.z * drift * .62);

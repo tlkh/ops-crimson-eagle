@@ -15,6 +15,15 @@ describe('mobile render budgets', () => {
     expect(scenePixelRatio(1920, 1080, 2, 1)).toBe(.75);
     expect(scenePixelRatio(390, 844, 3, .7)).toBeCloseTo(1.05);
   });
+  it('offers sharper desktop High without increasing Auto or phone rendering budgets', () => {
+    const desktop = qualityProfile('high', false);
+    expect(scenePixelRatio(1920, 1080, 2, desktop.renderScale, desktop.sceneLongEdge)).toBe(1);
+    expect(desktop.shadowSize).toBe(2048);
+    for (const profile of [qualityProfile('auto', false), qualityProfile('auto', true), qualityProfile('high', true)]) {
+      expect(profile.sceneLongEdge).toBe(1440);
+      expect(profile.shadowSize).toBe(1024);
+    }
+  });
   it('ignores warm-up and isolated stalls but reacts to sustained overload', () => {
     const adaptive = new AdaptiveQuality();
     for (let i = 0; i < 40; i++) adaptive.observe(50, 35, null, 30);
